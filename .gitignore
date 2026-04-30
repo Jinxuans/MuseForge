@@ -1,0 +1,17 @@
+node_modules/
+web/node_modules/
+
+*.exe
+*.test
+*.tsbuildinfo
+
+data/
+.env
+.env.*
+!.env.example
+*.rar
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
