@@ -9,6 +9,7 @@ const (
 	TypeGeneration = "generation"
 	TypeEdit       = "edit"
 
+	StatusPreparing = "preparing"
 	StatusQueued    = "queued"
 	StatusRunning   = "running"
 	StatusSucceeded = "succeeded"

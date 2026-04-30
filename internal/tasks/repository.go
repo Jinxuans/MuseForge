@@ -18,20 +18,23 @@ func NewRepository(db *sql.DB) *Repository {
 }
 
 func (r *Repository) CreateGeneration(ctx context.Context, input CreateGenerationTask) (*Task, error) {
-	return r.createTask(ctx, TypeGeneration, input.ClientHash, input.BaseURL, input.APIKey, input.Model, input.Prompt, input.Params, input.MaxAttempts)
+	return r.createTask(ctx, TypeGeneration, input.ClientHash, input.BaseURL, input.APIKey, input.Model, input.Prompt, input.Params, input.MaxAttempts, StatusQueued)
 }
 
 func (r *Repository) CreateEdit(ctx context.Context, input CreateEditTask) (*Task, error) {
-	return r.createTask(ctx, TypeEdit, input.ClientHash, input.BaseURL, input.APIKey, input.Model, input.Prompt, input.Params, input.MaxAttempts)
+	return r.createTask(ctx, TypeEdit, input.ClientHash, input.BaseURL, input.APIKey, input.Model, input.Prompt, input.Params, input.MaxAttempts, StatusPreparing)
 }
 
-func (r *Repository) createTask(ctx context.Context, taskType string, clientHash string, baseURL string, apiKey string, model string, prompt string, paramsMap map[string]any, maxAttempts int) (*Task, error) {
+func (r *Repository) createTask(ctx context.Context, taskType string, clientHash string, baseURL string, apiKey string, model string, prompt string, paramsMap map[string]any, maxAttempts int, status string) (*Task, error) {
 	params, err := json.Marshal(paramsMap)
 	if err != nil {
 		return nil, err
 	}
 	if maxAttempts <= 0 {
 		maxAttempts = 1
+	}
+	if status == "" {
+		status = StatusQueued
 	}
 
 	id := newID()
@@ -45,7 +48,7 @@ func (r *Repository) createTask(ctx context.Context, taskType string, clientHash
 		RETURNING id, type, model, prompt, params_json, status, COALESCE(error, ''),
 			COALESCE(last_error, ''), attempt_count, max_attempts, next_run_at,
 			provider_base_url_snapshot, created_at, started_at, completed_at
-	`, id, clientHash, baseURL, nullString(apiKey), taskType, model, prompt, params, StatusQueued, maxAttempts).Scan(
+	`, id, clientHash, baseURL, nullString(apiKey), taskType, model, prompt, params, status, maxAttempts).Scan(
 		&task.ID, &task.Type, &task.Model, &task.Prompt, &task.Params, &task.Status, &task.Error,
 		&task.LastError, &task.AttemptCount, &task.MaxAttempts, &task.NextRunAt,
 		&task.ProviderBaseURLSnapshot, &task.CreatedAt, &task.StartedAt, &task.CompletedAt,
@@ -176,6 +179,15 @@ func (r *Repository) RequeueRetry(ctx context.Context, taskID string, message st
 		SET status = $1, last_error = $2, error = NULL, next_run_at = now() + ($3::text)::interval
 		WHERE id = $4
 	`, StatusQueued, message, intervalString(delay), taskID)
+	return err
+}
+
+func (r *Repository) MarkQueued(ctx context.Context, taskID string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE tasks
+		SET status = $1, error = NULL, next_run_at = now()
+		WHERE id = $2 AND status = $3
+	`, StatusQueued, taskID, StatusPreparing)
 	return err
 }
 

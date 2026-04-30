@@ -398,7 +398,7 @@ function Tasks() {
         const nextTasks = Array.isArray(data.tasks) ? data.tasks : [];
         if (!alive) return;
         setTasks(nextTasks);
-        const hasActiveTask = nextTasks.some((task: Task) => task.status === 'queued' || task.status === 'running');
+        const hasActiveTask = nextTasks.some((task: Task) => isActiveTaskStatus(task.status));
         if (hasActiveTask) timer = window.setTimeout(load, 8000);
       } catch (error) {
         if (alive) setStatus(errorMessage(error));
@@ -428,7 +428,7 @@ function Tasks() {
           const showRetrySummary = failed && attempts > 1;
           return (
             <article className="task-row" key={task.id}>
-              <span className={`badge ${task.status}`}>{task.status}</span>
+              <span className={`badge ${task.status}`}>{taskStatusLabel(task.status)}</span>
               <div>
                 <strong>{task.type} · {task.model}</strong>
                 <p>{task.prompt}</p>
@@ -443,6 +443,22 @@ function Tasks() {
       </div>
     </div>
   );
+}
+
+function isActiveTaskStatus(status: string) {
+  return status === 'preparing' || status === 'queued' || status === 'running';
+}
+
+function taskStatusLabel(status: string) {
+  switch (status) {
+    case 'preparing': return '准备中';
+    case 'queued': return '排队中';
+    case 'running': return '处理中';
+    case 'succeeded': return '完成';
+    case 'failed': return '失败';
+    case 'canceled': return '已取消';
+    default: return status;
+  }
 }
 
 async function openDB(): Promise<IDBDatabase> {

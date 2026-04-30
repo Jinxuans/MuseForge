@@ -429,7 +429,8 @@ a {
 }
 
 .badge.running,
-.badge.queued {
+.badge.queued,
+.badge.preparing {
   color: #e5b567;
 }
 

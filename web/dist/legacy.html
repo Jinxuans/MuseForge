@@ -1818,7 +1818,7 @@ async function waitForTask(taskId, type, prompt, fmt) {
     if (!res.ok) throw new Error(await getResponseErrorMessage(res));
     const data = await res.json();
     const task = data.task;
-    if (task.status === 'queued' || task.status === 'running') continue;
+    if (isActiveTaskStatus(task.status)) continue;
     if (task.status === 'succeeded') {
       const images = (task.assets || []).map(asset => ({ url: asset.public_url }));
       stopStatusLoadingTimer();
@@ -1829,6 +1829,10 @@ async function waitForTask(taskId, type, prompt, fmt) {
     }
     throw new Error(task.error || `任务状态：${task.status}`);
   }
+}
+
+function isActiveTaskStatus(status) {
+  return status === 'preparing' || status === 'queued' || status === 'running';
 }
 
 async function submitAsyncEdit(formData) {

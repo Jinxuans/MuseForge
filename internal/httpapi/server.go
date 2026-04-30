@@ -424,6 +424,11 @@ func (s *Server) handleCreateEditTask(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusInternalServerError, errorPayload("Update task failed: "+err.Error()))
 		return
 	}
+	if err := s.repo.MarkQueued(r.Context(), task.ID); err != nil {
+		_ = s.repo.MarkFailed(r.Context(), task.ID, err.Error())
+		jsonResponse(w, http.StatusInternalServerError, errorPayload("Queue task failed: "+err.Error()))
+		return
+	}
 
 	updatedTask, err := s.repo.Get(r.Context(), clientHash, task.ID)
 	if err == nil && updatedTask != nil {
