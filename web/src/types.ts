@@ -1,7 +1,7 @@
 // ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
-export type AppMode = 'gallery' | 'agent'
+export type AppMode = 'gallery' | 'agent' | 'square'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export type BuiltInApiProvider = 'openai' | 'fal'
 export type ApiProvider = BuiltInApiProvider | string
@@ -126,6 +126,10 @@ export interface InputImage {
   id: string
   /** data URL，用于预览 */
   dataUrl: string
+  /** 从历史任务输出继续编辑时保留来源任务 */
+  sourceTaskId?: string | null
+  /** 从历史任务输出继续编辑时保留来源图片 */
+  sourceImageId?: string | null
 }
 
 export interface MaskDraft {
@@ -137,9 +141,113 @@ export interface MaskDraft {
 // ===== 任务记录 =====
 
 export type TaskStatus = 'running' | 'done' | 'error'
+export type TaskView = 'gallery' | 'trash'
+
+export interface CategoryConfig {
+  id: string
+  name: string
+  createdAt: number
+}
+
+export interface PromptLibraryItem {
+  id: string
+  title: string
+  content: string
+  createdAt: number
+  updatedAt: number
+}
+
+export type SquareShareKind = 'image' | 'task' | 'prompt'
+export type SquareShareStatus = 'published' | 'pending_review' | 'hidden' | 'deleted' | 'rejected'
+
+export interface SquareShareAssetSummary {
+  assetId: string
+  clientAssetId?: string | null
+  role?: 'output' | 'origin_input' | null
+  thumbUrl?: string | null
+  originalUrl?: string | null
+  width?: number | null
+  height?: number | null
+}
+
+export interface SquareShareSummary {
+  id: string
+  kind: SquareShareKind
+  title: string
+  prompt: string
+  coverAsset?: SquareShareAssetSummary | null
+  tags: string[]
+  status?: SquareShareStatus
+  createdAt: number
+  viewCount?: number
+}
+
+export interface SquareShareDetail extends SquareShareSummary {
+  manifest?: unknown
+  assets?: SquareShareAssetSummary[]
+}
+
+export interface SquareListInput {
+  kind: SquareShareKind
+  sort?: 'latest'
+  q?: string
+  cursor?: string
+  limit?: number
+}
+
+export interface SquareListResult {
+  items: SquareShareSummary[]
+  nextCursor: string | null
+}
+
+export interface SquareMySharesInput {
+  q?: string
+  cursor?: string
+  limit?: number
+}
+
+export interface SquareIdentity {
+  publisherId: string
+  token: string
+}
+
+export interface SquarePromptShareTarget {
+  kind: 'prompt'
+  title?: string
+  content: string
+}
+
+export interface SquareTaskShareTarget {
+  kind: 'task'
+  taskId: string
+}
+
+export type SquareShareTarget = SquarePromptShareTarget | SquareTaskShareTarget
+
+export interface TaskErrorDebugInfo {
+  createdAt: number
+  message: string
+  apiProvider?: ApiProvider
+  apiProfileName?: string
+  apiMode?: ApiMode
+  apiModel?: string
+  params?: TaskParams
+  rawImageUrls?: string[]
+  rawResponsePayload?: string
+}
 
 export interface TaskRecord {
   id: string
+  /** 所属分类 */
+  categoryId?: string | null
+  /** 任务提交时的分类名称快照 */
+  categoryName?: string | null
+  /** 移入回收站时间；空值表示仍在画廊 */
+  deletedAt?: number | null
+  /** 来源任务，用于展示编辑/复用链路 */
+  parentTaskId?: string | null
+  /** 来源任务中的图片 */
+  parentImageId?: string | null
   prompt: string
   params: TaskParams
   /** 生成时使用的 Provider 类型 */
@@ -180,6 +288,8 @@ export interface TaskRecord {
   rawImageUrls?: string[]
   /** 发生解析错误时的原始响应 JSON */
   rawResponsePayload?: string
+  /** 失败时保留的排查快照 */
+  errorDebug?: TaskErrorDebugInfo | null
   status: TaskStatus
   error: string | null
   createdAt: number
@@ -399,6 +509,8 @@ export interface ExportData {
   settings?: AppSettings
   tasks?: TaskRecord[]
   agentConversations?: AgentConversation[]
+  categories?: CategoryConfig[]
+  promptLibrary?: PromptLibraryItem[]
   /** imageId → 图片信息 */
   imageFiles?: Record<string, {
     path: string

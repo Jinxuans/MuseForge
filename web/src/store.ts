@@ -8,13 +8,17 @@ import type {
   ApiProfile,
   AppSettings,
   AppMode,
+  CategoryConfig,
   TaskParams,
   InputImage,
   MaskDraft,
+  PromptLibraryItem,
   TaskRecord,
+  TaskView,
   ExportData,
   ResponsesApiResponse,
   ResponsesOutputItem,
+  SquareShareTarget,
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
@@ -78,6 +82,8 @@ const OPENAI_INTERRUPTED_ERROR = '请求中断'
 const AGENT_STOPPED_MESSAGE = '已停止生成。'
 const AGENT_CONVERSATION_TITLE_MAX_LENGTH = 28
 const ERROR_TOAST_MAX_LENGTH = 80
+const UNCATEGORIZED_CATEGORY_ID = '__uncategorized__'
+const TRASH_RETENTION_MS = 15 * 24 * 60 * 60 * 1000
 type ToastType = 'info' | 'success' | 'error'
 type AgentInputDraft = {
   prompt: string
@@ -381,6 +387,62 @@ function normalizeStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 }
 
+function normalizeCategories(value: unknown): CategoryConfig[] {
+  if (!Array.isArray(value)) return []
+  const used = new Set<string>()
+  return value
+    .map((item): CategoryConfig | null => {
+      if (!isRecord(item) || typeof item.id !== 'string' || !item.id || typeof item.name !== 'string') return null
+      const id = item.id.trim()
+      if (!id || id === UNCATEGORIZED_CATEGORY_ID || used.has(id)) return null
+      used.add(id)
+      return {
+        id,
+        name: item.name.trim() || '未命名分类',
+        createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
+      }
+    })
+    .filter((item): item is CategoryConfig => item != null)
+}
+
+function normalizePromptLibrary(value: unknown): PromptLibraryItem[] {
+  if (!Array.isArray(value)) return []
+  const used = new Set<string>()
+  return value
+    .map((item): PromptLibraryItem | null => {
+      if (!isRecord(item) || typeof item.id !== 'string' || !item.id || typeof item.content !== 'string') return null
+      const id = item.id.trim()
+      if (!id || used.has(id)) return null
+      used.add(id)
+      const content = item.content.trim()
+      if (!content) return null
+      const createdAt = typeof item.createdAt === 'number' ? item.createdAt : Date.now()
+      return {
+        id,
+        title: typeof item.title === 'string' && item.title.trim() ? item.title.trim() : createPromptLibraryTitle(content),
+        content,
+        createdAt,
+        updatedAt: typeof item.updatedAt === 'number' ? item.updatedAt : createdAt,
+      }
+    })
+    .filter((item): item is PromptLibraryItem => item != null)
+}
+
+function createPromptLibraryTitle(content: string) {
+  const firstLine = content.split(/\r?\n/).find((line) => line.trim())?.trim() ?? '未命名提示词'
+  const chars = Array.from(firstLine)
+  return chars.length > 28 ? `${chars.slice(0, 25).join('')}...` : firstLine
+}
+
+function getPersistableInputImage(img: InputImage): InputImage {
+  return {
+    id: img.id,
+    dataUrl: '',
+    ...(img.sourceTaskId ? { sourceTaskId: img.sourceTaskId } : {}),
+    ...(img.sourceImageId ? { sourceImageId: img.sourceImageId } : {}),
+  }
+}
+
 function normalizeAgentRound(value: unknown, fallbackIndex: number): AgentRound | null {
   if (!value || typeof value !== 'object') return null
   const round = value as Partial<AgentRound>
@@ -598,13 +660,17 @@ export function getPersistedState(state: AppState) {
     ...(settings.persistInputOnRestart && (state.appMode === 'gallery' || galleryInputDraft)
       ? {
           prompt: galleryInputDraft?.prompt ?? '',
-          inputImages: galleryInputDraft?.inputImages.map((img) => ({ id: img.id, dataUrl: '' })) ?? [],
+          inputImages: galleryInputDraft?.inputImages.map(getPersistableInputImage) ?? [],
         }
       : {}),
     dismissedCodexCliPrompts: state.dismissedCodexCliPrompts,
+    categories: state.categories,
+    activeCategoryId: state.activeCategoryId,
+    taskView: state.taskView,
+    promptLibrary: state.promptLibrary,
     appMode: state.appMode,
     galleryInputDraft: settings.persistInputOnRestart && galleryInputDraft
-      ? { ...galleryInputDraft, inputImages: galleryInputDraft.inputImages.map((img) => ({ id: img.id, dataUrl: '' })) }
+      ? { ...galleryInputDraft, inputImages: galleryInputDraft.inputImages.map(getPersistableInputImage) }
       : null,
     ...(agentConversationMigrationPending && !agentConversationPersistenceReady
       ? { agentConversations: getPersistableAgentConversations(state.agentConversations) }
@@ -644,7 +710,13 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     typeof persisted.activeAgentConversationId === 'string' && (!hasPersistedAgentConversations || agentConversations.some((conversation) => conversation.id === persisted.activeAgentConversationId))
       ? persisted.activeAgentConversationId
       : agentConversations[0]?.id ?? null
-  const appMode = persisted.appMode === 'agent' ? 'agent' : 'gallery'
+  const appMode = persisted.appMode === 'agent' || persisted.appMode === 'square' ? persisted.appMode : 'gallery'
+  const categories = normalizeCategories(persisted.categories)
+  const activeCategoryId = typeof persisted.activeCategoryId === 'string' &&
+    (persisted.activeCategoryId === UNCATEGORIZED_CATEGORY_ID || categories.some((category) => category.id === persisted.activeCategoryId))
+    ? persisted.activeCategoryId
+    : 'all'
+  const taskView: TaskView = persisted.taskView === 'trash' ? 'trash' : 'gallery'
   const galleryInputDraft = settings.persistInputOnRestart
     ? normalizeAgentInputDraft(persisted.galleryInputDraft ?? {
         prompt: persisted.prompt,
@@ -676,6 +748,11 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     ...persisted,
     settings,
     appMode,
+    categories,
+    activeCategoryId,
+    taskView,
+    promptLibrary: normalizePromptLibrary(persisted.promptLibrary),
+    showPromptLibrary: false,
     galleryInputDraft: galleryInputDraft && !isEmptyAgentInputDraft(galleryInputDraft) ? galleryInputDraft : null,
     agentConversations,
     activeAgentConversationId,
@@ -769,6 +846,26 @@ interface AppState {
   setFilterStatus: (status: AppState['filterStatus']) => void
   filterFavorite: boolean
   setFilterFavorite: (f: boolean) => void
+  taskView: TaskView
+  setTaskView: (view: TaskView) => void
+  categories: CategoryConfig[]
+  activeCategoryId: string
+  setActiveCategoryId: (id: string) => void
+  addCategory: (name: string) => string | null
+  renameCategory: (id: string, name: string) => void
+  deleteCategory: (id: string) => void
+  moveCategoryTaskIds: string[] | null
+  setMoveCategoryTaskIds: (ids: string[] | null) => void
+
+  // 提示词库
+  promptLibrary: PromptLibraryItem[]
+  showPromptLibrary: boolean
+  setShowPromptLibrary: (show: boolean) => void
+  savePromptToLibrary: (content: string, title?: string) => void
+  updatePromptLibraryItem: (id: string, patch: Partial<Pick<PromptLibraryItem, 'title' | 'content'>>) => void
+  deletePromptLibraryItem: (id: string) => void
+  shareToSquareTarget: SquareShareTarget | null
+  setShareToSquareTarget: (target: SquareShareTarget | null) => void
 
   // 多选
   selectedTaskIds: string[]
@@ -871,7 +968,12 @@ function normalizeInputImages(value: unknown): InputImage[] {
   return value
     .map((img): InputImage | null => {
       if (!isRecord(img) || typeof img.id !== 'string') return null
-      return { id: img.id, dataUrl: typeof img.dataUrl === 'string' ? img.dataUrl : '' }
+      return {
+        id: img.id,
+        dataUrl: typeof img.dataUrl === 'string' ? img.dataUrl : '',
+        sourceTaskId: typeof img.sourceTaskId === 'string' ? img.sourceTaskId : null,
+        sourceImageId: typeof img.sourceImageId === 'string' ? img.sourceImageId : null,
+      }
     })
     .filter((img): img is InputImage => img != null)
 }
@@ -1035,7 +1137,7 @@ function getPersistableAgentInputDrafts(state: AppState) {
     if (!conversationIds.has(conversationId) || isEmptyAgentInputDraft(draft)) continue
     persistable[conversationId] = {
       ...copyAgentInputDraft(draft),
-      inputImages: draft.inputImages.map((img) => ({ id: img.id, dataUrl: '' })),
+      inputImages: draft.inputImages.map(getPersistableInputImage),
     }
   }
   return persistable
@@ -1047,7 +1149,7 @@ export const useStore = create<AppState>()(
       // Mode
       appMode: 'gallery',
       setAppMode: (appMode) => {
-        if (appMode === 'gallery') {
+        if (appMode === 'gallery' || appMode === 'square') {
           const state = get()
           const agentInputDrafts = saveActiveAgentInputDrafts(state)
           const galleryInputDraft = saveGalleryInputDraft(state)
@@ -1058,7 +1160,7 @@ export const useStore = create<AppState>()(
             agentMobileHeaderVisible: true,
             selectedTaskIds: [],
             agentEditingRoundId: null,
-            ...(state.appMode === 'agent' ? restoreGalleryInputDraftState(galleryInputDraft) : {}),
+            ...(appMode === 'gallery' && state.appMode === 'agent' ? restoreGalleryInputDraftState(galleryInputDraft) : {}),
           }))
           return
         }
@@ -1394,6 +1496,83 @@ export const useStore = create<AppState>()(
       setFilterStatus: (filterStatus) => set({ filterStatus }),
       filterFavorite: false,
       setFilterFavorite: (filterFavorite) => set({ filterFavorite }),
+      taskView: 'gallery',
+      setTaskView: (taskView) => set({ taskView, selectedTaskIds: [] }),
+      categories: [],
+      activeCategoryId: 'all',
+      setActiveCategoryId: (activeCategoryId) => set({ activeCategoryId, selectedTaskIds: [] }),
+      addCategory: (name) => {
+        const trimmed = name.trim()
+        if (!trimmed) return null
+        const id = genId()
+        set((state) => ({
+          categories: [...state.categories, { id, name: trimmed, createdAt: Date.now() }],
+          activeCategoryId: id,
+        }))
+        return id
+      },
+      renameCategory: (id, name) => {
+        const trimmed = name.trim()
+        if (!trimmed) return
+        set((state) => ({
+          categories: state.categories.map((category) => category.id === id ? { ...category, name: trimmed } : category),
+          tasks: state.tasks.map((task) => task.categoryId === id ? { ...task, categoryName: trimmed } : task),
+        }))
+        for (const task of useStore.getState().tasks.filter((item) => item.categoryId === id)) void putTask(task)
+      },
+      deleteCategory: (id) => {
+        set((state) => ({
+          categories: state.categories.filter((category) => category.id !== id),
+          activeCategoryId: state.activeCategoryId === id ? 'all' : state.activeCategoryId,
+          tasks: state.tasks.map((task) => task.categoryId === id ? { ...task, categoryId: null, categoryName: null } : task),
+        }))
+        for (const task of useStore.getState().tasks.filter((item) => item.categoryId == null && item.categoryName == null)) void putTask(task)
+      },
+      moveCategoryTaskIds: null,
+      setMoveCategoryTaskIds: (moveCategoryTaskIds) => {
+        if (moveCategoryTaskIds?.length) dismissAllTooltips()
+        set({ moveCategoryTaskIds: moveCategoryTaskIds?.length ? moveCategoryTaskIds : null })
+      },
+
+      // Prompt library
+      promptLibrary: [],
+      showPromptLibrary: false,
+      setShowPromptLibrary: (showPromptLibrary) => {
+        if (showPromptLibrary) dismissAllTooltips()
+        set({ showPromptLibrary })
+      },
+      savePromptToLibrary: (content, title) => {
+        const trimmed = content.trim()
+        if (!trimmed) return
+        const now = Date.now()
+        const item: PromptLibraryItem = {
+          id: genId(),
+          title: title?.trim() || createPromptLibraryTitle(trimmed),
+          content: trimmed,
+          createdAt: now,
+          updatedAt: now,
+        }
+        set((state) => ({ promptLibrary: [item, ...state.promptLibrary] }))
+      },
+      updatePromptLibraryItem: (id, patch) => set((state) => ({
+        promptLibrary: state.promptLibrary.map((item) => item.id === id
+          ? {
+              ...item,
+              ...(patch.title !== undefined ? { title: patch.title.trim() || createPromptLibraryTitle(patch.content ?? item.content) } : {}),
+              ...(patch.content !== undefined ? { content: patch.content } : {}),
+              updatedAt: Date.now(),
+            }
+          : item,
+        ),
+      })),
+      deletePromptLibraryItem: (id) => set((state) => ({
+        promptLibrary: state.promptLibrary.filter((item) => item.id !== id),
+      })),
+      shareToSquareTarget: null,
+      setShareToSquareTarget: (shareToSquareTarget) => {
+        if (shareToSquareTarget) dismissAllTooltips()
+        set({ shareToSquareTarget })
+      },
 
       // Selection
       selectedTaskIds: [],
@@ -1734,6 +1913,20 @@ function getRawErrorPayload(err: unknown): Pick<Partial<TaskRecord>, 'rawImageUr
   }
 }
 
+function createTaskErrorDebug(task: TaskRecord, message: string, rawPayload: Pick<Partial<TaskRecord>, 'rawImageUrls' | 'rawResponsePayload'> = {}) {
+  return {
+    createdAt: Date.now(),
+    message,
+    apiProvider: task.apiProvider,
+    apiProfileName: task.apiProfileName,
+    apiMode: task.apiMode,
+    apiModel: task.apiModel,
+    params: task.params,
+    rawImageUrls: rawPayload.rawImageUrls,
+    rawResponsePayload: rawPayload.rawResponsePayload,
+  }
+}
+
 function clearFalRecoveryTimer(taskId: string) {
   const timer = falRecoveryTimers.get(taskId)
   if (timer) clearTimeout(timer)
@@ -1871,10 +2064,13 @@ async function recoverFalTask(taskId: string) {
     }
 
     clearFalRecoveryTimer(taskId)
+    const rawPayload = getRawErrorPayload(err)
+    const errorMessage = getFalErrorMessage(err) ?? (err instanceof Error ? err.message : String(err))
     updateTaskInStore(taskId, {
       status: 'error',
-      error: getFalErrorMessage(err) ?? (err instanceof Error ? err.message : String(err)),
-      ...getRawErrorPayload(err),
+      error: errorMessage,
+      ...rawPayload,
+      errorDebug: createTaskErrorDebug(task, errorMessage, rawPayload),
       falRecoverable: false,
       finishedAt: Date.now(),
       elapsed: Date.now() - task.createdAt,
@@ -1927,6 +2123,7 @@ export async function initStore() {
     .filter((task, index) => interruptedTaskIds.has(task.id) || task.rawResponsePayload !== markedTasks[index]?.rawResponsePayload)
     .map((task) => putTask(task)))
   useStore.getState().setTasks(tasks)
+  void cleanupExpiredTrashTasks()
   showSupportPromptForExistingLocalData(tasks)
   for (const task of tasks) {
     if (
@@ -2079,8 +2276,16 @@ export async function initStore() {
 }
 
 /** 提交新任务 */
+function resolveTaskParentFromInputImages(inputImages: InputImage[]) {
+  const source = inputImages.find((img) => img.sourceTaskId && img.sourceImageId)
+  return {
+    parentTaskId: source?.sourceTaskId ?? null,
+    parentImageId: source?.sourceImageId ?? null,
+  }
+}
+
 export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {}) {
-  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
+  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, activeCategoryId, categories, showToast, setConfirmDialog } =
     useStore.getState()
 
   const normalizedSettings = normalizeSettings(settings)
@@ -2164,8 +2369,17 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   }
 
   const taskId = genId()
+  const selectedCategory = activeCategoryId !== 'all' && activeCategoryId !== UNCATEGORIZED_CATEGORY_ID
+    ? categories.find((category) => category.id === activeCategoryId)
+    : null
+  const lineage = resolveTaskParentFromInputImages(orderedInputImages)
   const task: TaskRecord = {
     id: taskId,
+    categoryId: selectedCategory?.id ?? null,
+    categoryName: selectedCategory?.name ?? null,
+    deletedAt: null,
+    parentTaskId: lineage.parentTaskId,
+    parentImageId: lineage.parentImageId,
     prompt: prompt.trim(),
     params: normalizedParams,
     apiProvider: activeProfile.provider,
@@ -3966,10 +4180,12 @@ async function executeTask(taskId: string) {
       if (networkErrorHint && !errorMessage.includes(IMAGE_FETCH_CORS_HINT)) {
         errorMessage += `\n${networkErrorHint}`
       }
+      const rawPayload = getRawErrorPayload(err)
       updateTaskInStore(taskId, {
         status: 'error',
         error: errorMessage,
-        ...getRawErrorPayload(err),
+        ...rawPayload,
+        errorDebug: createTaskErrorDebug(latestTask, errorMessage, rawPayload),
         falRecoverable: false,
         customRecoverable: false,
         finishedAt: Date.now(),
@@ -3996,6 +4212,41 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   if (task) putTask(task)
 }
 
+export function moveTasksToCategory(taskIds: string[], categoryId: string | null) {
+  const { categories, tasks, setTasks, clearSelection, showToast } = useStore.getState()
+  const ids = new Set(taskIds)
+  const category = categoryId ? categories.find((item) => item.id === categoryId) ?? null : null
+  const updated = tasks.map((task) => ids.has(task.id)
+    ? { ...task, categoryId: category?.id ?? null, categoryName: category?.name ?? null }
+    : task,
+  )
+  setTasks(updated)
+  for (const task of updated.filter((item) => ids.has(item.id))) void putTask(task)
+  clearSelection()
+  showToast(category ? `已移动到「${category.name}」` : '已移动到未分类', 'success')
+}
+
+export function moveTasksToTrash(taskIds: string[]) {
+  const ids = new Set(taskIds)
+  const now = Date.now()
+  const { tasks, setTasks, clearSelection, showToast } = useStore.getState()
+  const updated = tasks.map((task) => ids.has(task.id) ? { ...task, deletedAt: task.deletedAt ?? now } : task)
+  setTasks(updated)
+  for (const task of updated.filter((item) => ids.has(item.id))) void putTask(task)
+  clearSelection()
+  showToast(`已移入回收站：${taskIds.length} 条`, 'success')
+}
+
+export function restoreTasksFromTrash(taskIds: string[]) {
+  const ids = new Set(taskIds)
+  const { tasks, setTasks, clearSelection, showToast } = useStore.getState()
+  const updated = tasks.map((task) => ids.has(task.id) ? { ...task, deletedAt: null } : task)
+  setTasks(updated)
+  for (const task of updated.filter((item) => ids.has(item.id))) void putTask(task)
+  clearSelection()
+  showToast(`已恢复：${taskIds.length} 条`, 'success')
+}
+
 /** 重试失败的任务：创建新任务并执行 */
 export async function retryTask(task: TaskRecord) {
   const { settings } = useStore.getState()
@@ -4004,6 +4255,11 @@ export async function retryTask(task: TaskRecord) {
   const taskId = genId()
   const newTask: TaskRecord = {
     id: taskId,
+    categoryId: task.categoryId ?? null,
+    categoryName: task.categoryName ?? null,
+    deletedAt: null,
+    parentTaskId: task.id,
+    parentImageId: task.outputImages[0] ?? task.parentImageId ?? null,
     prompt: task.prompt,
     params: normalizedParams,
     apiProvider: activeProfile.provider,
@@ -4104,17 +4360,15 @@ export async function editOutputs(task: TaskRecord) {
     if (inputImages.find((i) => i.id === imgId)) continue
     const dataUrl = await ensureImageCached(imgId)
     if (dataUrl) {
-      addInputImage({ id: imgId, dataUrl })
+      addInputImage({ id: imgId, dataUrl, sourceTaskId: task.id, sourceImageId: imgId })
       added++
     }
   }
   showToast(`已添加 ${added} 张输出图到输入`, 'success')
 }
 
-/** 删除多条任务 */
-export async function removeMultipleTasks(taskIds: string[]) {
-  const { tasks, setTasks, inputImages, galleryInputDraft, showToast, clearSelection, selectedTaskIds } = useStore.getState()
-  
+async function permanentlyDeleteTasks(taskIds: string[], options: { showToast?: boolean } = { showToast: true }) {
+  const { tasks, setTasks, inputImages, galleryInputDraft, showToast, selectedTaskIds } = useStore.getState()
   if (!taskIds.length) return
 
   const toDelete = new Set(taskIds)
@@ -4152,51 +4406,43 @@ export async function removeMultipleTasks(taskIds: string[]) {
     }
   }
 
-  // 如果删除的任务在选中列表中，则移除
+  useStore.setState((state) => ({
+    moveCategoryTaskIds: state.moveCategoryTaskIds?.filter((id) => !toDelete.has(id)) ?? null,
+  }))
+
   const newSelection = selectedTaskIds.filter(id => !toDelete.has(id))
   if (newSelection.length !== selectedTaskIds.length) {
     useStore.getState().setSelectedTaskIds(newSelection)
   }
 
-  showToast(`已删除 ${taskIds.length} 条记录`, 'success')
+  if (options.showToast !== false) showToast(`已删除 ${taskIds.length} 条记录`, 'success')
+}
+
+/** 删除多条任务 */
+export async function removeMultipleTasks(taskIds: string[]) {
+  await permanentlyDeleteTasks(taskIds, { showToast: true })
 }
 
 /** 删除单条任务 */
 export async function removeTask(task: TaskRecord) {
-  const { tasks, setTasks, inputImages, galleryInputDraft, showToast } = useStore.getState()
+  await permanentlyDeleteTasks([task.id], { showToast: false })
+  useStore.getState().showToast('记录已删除', 'success')
+}
 
-  // 收集此任务关联的图片
-  const taskImageIds = new Set([
-    ...(task.inputImageIds || []),
-    ...(task.maskImageId ? [task.maskImageId] : []),
-    ...(task.outputImages || []),
-    ...(task.streamPartialImageIds || []),
-  ])
+export async function emptyTrash() {
+  const trashIds = useStore.getState().tasks.filter((task) => task.deletedAt).map((task) => task.id)
+  if (!trashIds.length) return
+  await permanentlyDeleteTasks(trashIds, { showToast: false })
+  useStore.getState().showToast(`已清空回收站：${trashIds.length} 条`, 'success')
+}
 
-  // 从列表移除
-  const remaining = await scrubAgentOutputPayloadsForDeletedTasks([task], tasks.filter((t) => t.id !== task.id))
-  setTasks(remaining)
-  await dbDeleteTask(task.id)
-
-  // 找出其他任务仍引用的图片
-  const stillUsed = new Set<string>()
-  for (const t of remaining) {
-    addTaskReferencedImageIds(stillUsed, t)
-  }
-  addAgentReferencedImageIds(stillUsed)
-  addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
-  for (const img of inputImages) stillUsed.add(img.id)
-
-  // 删除孤立图片
-  for (const imgId of taskImageIds) {
-    if (!stillUsed.has(imgId)) {
-      await deleteImage(imgId)
-      imageCache.delete(imgId)
-      thumbnailCache.delete(imgId)
-    }
-  }
-
-  showToast('记录已删除', 'success')
+export async function cleanupExpiredTrashTasks(now = Date.now()) {
+  const expiredIds = useStore.getState().tasks
+    .filter((task) => task.deletedAt && now - task.deletedAt > TRASH_RETENTION_MS)
+    .map((task) => task.id)
+  if (!expiredIds.length) return 0
+  await permanentlyDeleteTasks(expiredIds, { showToast: false })
+  return expiredIds.length
 }
 
 /** 清空数据选项 */
@@ -4220,15 +4466,19 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
     useStore.setState({
       agentConversations: [],
       activeAgentConversationId: null,
+      categories: [],
+      activeCategoryId: 'all',
+      taskView: 'gallery',
       supportPromptOpen: false,
       supportPromptSkippedForImportedData: false,
+      moveCategoryTaskIds: null,
     })
     clearInputImages()
     clearMaskDraft()
   }
 
   if (options.clearConfig) {
-    useStore.setState({ dismissedCodexCliPrompts: [], supportPromptDismissed: false })
+    useStore.setState({ dismissedCodexCliPrompts: [], promptLibrary: [], supportPromptDismissed: false })
     setSettings({ ...DEFAULT_SETTINGS })
     setParams({ ...DEFAULT_PARAMS })
   }
@@ -4301,10 +4551,13 @@ async function recoverCustomTask(taskId: string) {
     await completeRecoveredCustomTask(task, result)
   } catch (err) {
     clearCustomRecoveryTimer(taskId)
+    const rawPayload = getRawErrorPayload(err)
+    const errorMessage = err instanceof Error ? err.message : String(err)
     updateTaskInStore(taskId, {
       status: 'error',
-      error: err instanceof Error ? err.message : String(err),
-      ...getRawErrorPayload(err),
+      error: errorMessage,
+      ...rawPayload,
+      errorDebug: createTaskErrorDebug(task, errorMessage, rawPayload),
       customRecoverable: false,
       finishedAt: Date.now(),
       elapsed: Date.now() - task.createdAt,
@@ -4328,7 +4581,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
   try {
     const tasks = options.exportTasks ? await getAllTasks() : []
     const images = options.exportTasks ? await getAllImages() : []
-    const { settings, agentConversations } = useStore.getState()
+    const { settings, agentConversations, categories, promptLibrary } = useStore.getState()
     const exportedAt = Date.now()
     const imageCreatedAtFallback = new Map<string, number>()
 
@@ -4395,6 +4648,10 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     }
 
     if (options.exportConfig) manifest.settings = settings
+    if (options.exportConfig || options.exportTasks) {
+      manifest.categories = categories
+      manifest.promptLibrary = promptLibrary
+    }
     if (options.exportTasks) {
       manifest.tasks = tasks
       manifest.agentConversations = getPersistableAgentConversations(agentConversations)
@@ -4504,6 +4761,13 @@ export async function importData(file: File, options: ImportOptions = { importCo
     if (options.importConfig && data.settings) {
       const state = useStore.getState()
       state.setSettings(mergeImportedSettings(state.settings, data.settings))
+    }
+
+    if (options.importConfig || options.importTasks) {
+      useStore.setState((state) => ({
+        categories: normalizeCategories([...(state.categories ?? []), ...(data.categories ?? [])]),
+        promptLibrary: normalizePromptLibrary([...(data.promptLibrary ?? []), ...state.promptLibrary]),
+      }))
     }
 
     let msg = '数据已成功导入'

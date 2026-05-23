@@ -181,6 +181,25 @@ Cache API 缓存 /files/* 图片响应
 图库页提供刷新、清理图片缓存、导入旧历史、导出旧历史
 ```
 
+前端创作工作流：
+
+```text
+画廊支持分类、收藏、回收站、批量选择、右键菜单和任务链查看
+提示词库用于保存、复用和分享常用提示词
+失败任务会保留前端错误快照，便于复制完整排查信息
+广场前端支持浏览任务/提示词、查看分享详情、复用提示词，以及发起分享
+```
+
+图片分享广场：
+
+```text
+广场前端使用 /api/v1 协议访问远端分享服务
+设置 VITE_SQUARE_API_URL 后，前端会读取 /api/v1/square、/api/v1/shares 等接口
+未设置 VITE_SQUARE_API_URL 时，广场页面会显示等待连接状态，不影响本地画廊和 Agent
+当前仓库已移植广场前端界面、分享弹窗和 Share Manifest 构建逻辑
+广场后端建议后续由 MuseForge 的 Go 服务实现同一套 /api/v1 协议
+```
+
 本地数据设置：
 
 ```text
@@ -232,4 +251,4 @@ web/dist/            前端构建产物，由 Go embed 打包
 
 ## 许可说明
 
-第三方前端代码来源与许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+第三方前端代码来源与许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本次图片分享广场相关前端移植来源为 [insistanan/GPT_Image_Playground.git](https://github.com/insistanan/GPT_Image_Playground.git)。

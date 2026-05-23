@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTask } from '../store'
+import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, moveTasksToTrash, removeTask, restoreTasksFromTrash, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTask } from '../store'
+import type { TaskRecord } from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
@@ -14,6 +15,55 @@ import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashI
 
 import ViewportTooltip from './ViewportTooltip'
 
+const MAX_LINEAGE_DEPTH = 12
+
+function getTaskTitle(task: TaskRecord) {
+  return task.prompt?.trim() || task.id
+}
+
+function getStatusLabel(status: TaskRecord['status']) {
+  if (status === 'done') return '完成'
+  if (status === 'running') return '运行中'
+  return '失败'
+}
+
+function redactRawResponsePayload(payload: string) {
+  return payload.replace(/"(b64_json|base64|data)":\s*"[^"]+"/g, '"$1": "<base64_data>"')
+}
+
+function buildAncestorChain(task: TaskRecord, tasks: TaskRecord[]) {
+  const byId = new Map(tasks.map((item) => [item.id, item]))
+  const ancestors: TaskRecord[] = []
+  const visited = new Set([task.id])
+  let cursorId = task.parentTaskId || null
+  let parentMissing = Boolean(cursorId)
+
+  for (let depth = 0; cursorId && depth < MAX_LINEAGE_DEPTH; depth += 1) {
+    if (visited.has(cursorId)) {
+      parentMissing = false
+      break
+    }
+    const parent = byId.get(cursorId)
+    if (!parent) {
+      parentMissing = true
+      break
+    }
+    ancestors.unshift(parent)
+    visited.add(parent.id)
+    cursorId = parent.parentTaskId || null
+    parentMissing = Boolean(cursorId)
+  }
+
+  if (!cursorId) parentMissing = false
+  return { ancestors, parentMissing }
+}
+
+function getChildTasks(task: TaskRecord, tasks: TaskRecord[]) {
+  return tasks
+    .filter((item) => item.parentTaskId === task.id)
+    .sort((a, b) => b.createdAt - a.createdAt)
+}
+
 export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
   const detailTaskId = useStore((s) => s.detailTaskId)
@@ -21,8 +71,10 @@ export default function DetailModal() {
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
+  const setShareToSquareTarget = useStore((s) => s.setShareToSquareTarget)
   const showToast = useStore((s) => s.showToast)
   const settings = useStore((s) => s.settings)
+  const taskView = useStore((s) => s.taskView)
   const dismissedCodexCliPrompts = useStore((s) => s.dismissedCodexCliPrompts)
   const streamPreviewSrc = useStore((s) => detailTaskId ? s.streamPreviews[detailTaskId] || '' : '')
   const streamPreviewSlots = useStore((s) => detailTaskId ? s.streamPreviewSlots[detailTaskId] : undefined)
@@ -36,15 +88,19 @@ export default function DetailModal() {
   const [now, setNow] = useState(Date.now())
   const [showRawUrlsModal, setShowRawUrlsModal] = useState(false)
   const [showRawResponseModal, setShowRawResponseModal] = useState(false)
+  const [showDebugSnapshotModal, setShowDebugSnapshotModal] = useState(false)
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   const modalRef = useRef<HTMLDivElement>(null)
   const rawUrlsModalRef = useRef<HTMLDivElement>(null)
   const rawResponseModalRef = useRef<HTMLDivElement>(null)
+  const debugSnapshotModalRef = useRef<HTMLDivElement>(null)
 
   const rawUrlsBackdropPointerDownRef = useRef(false)
   const rawResponseBackdropPointerDownRef = useRef(false)
+  const debugSnapshotBackdropPointerDownRef = useRef(false)
 
   const copyErrorTooltip = useTooltip()
+  const viewDebugSnapshotTooltip = useTooltip()
   const copyRawUrlsTooltip = useTooltip()
   const viewRawResponseTooltip = useTooltip()
   const downloadPartialImagesTooltip = useTooltip()
@@ -93,11 +149,14 @@ export default function DetailModal() {
   }, [imageIndex, streamPreviewItems.length, task?.outputImages?.length, task?.status])
 
   useCloseOnEscape(Boolean(task), () => setDetailTaskId(null))
-  usePreventBackgroundScroll(Boolean(task), [modalRef, rawUrlsModalRef, rawResponseModalRef])
+  usePreventBackgroundScroll(Boolean(task), [modalRef, rawUrlsModalRef, rawResponseModalRef, debugSnapshotModalRef])
 
   // Reset index when task changes
   useEffect(() => {
     setImageIndex(0)
+    setShowRawUrlsModal(false)
+    setShowRawResponseModal(false)
+    setShowDebugSnapshotModal(false)
   }, [detailTaskId])
 
   useEffect(() => {
@@ -223,6 +282,10 @@ export default function DetailModal() {
   const streamPreviewLen = streamPreviewItems.length
   const currentStreamPreviewSrc = activeStreamPreviewSrc
   const streamPartialImageIds = task.streamPartialImageIds ?? []
+  const { ancestors: lineageAncestors, parentMissing } = buildAncestorChain(task, tasks)
+  const lineageChildren = getChildTasks(task, tasks)
+  const showLineage = lineageAncestors.length > 0 || lineageChildren.length > 0 || parentMissing || task.parentImageId
+  const sanitizedRawResponsePayload = task.rawResponsePayload ? redactRawResponsePayload(task.rawResponsePayload) : ''
 
   const formatTime = (ts: number | null) => {
     if (!ts) return ''
@@ -262,11 +325,24 @@ export default function DetailModal() {
 
   const handleDelete = () => {
     setDetailTaskId(null)
+    if (taskView !== 'trash') {
+      setConfirmDialog({
+        title: '移入回收站',
+        message: '确定要把这条记录移入回收站吗？图片资源会保留，之后可以恢复或彻底删除。',
+        action: () => moveTasksToTrash([task.id]),
+      })
+      return
+    }
     setConfirmDialog({
-      title: '删除记录',
-      message: '确定要删除这条记录吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
+      title: '彻底删除记录',
+      message: '确定要彻底删除这条记录吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
       action: () => removeTask(task),
     })
+  }
+
+  const handleRestore = () => {
+    restoreTasksFromTrash([task.id])
+    setDetailTaskId(null)
   }
 
   const handleToggleFavorite = () => {
@@ -274,13 +350,103 @@ export default function DetailModal() {
   }
 
   const handleCopyError = async () => {
-    const errorText = task.error || '生成失败'
+    const errorText = buildTaskDebugSnapshot()
     try {
       await copyTextToClipboard(errorText)
       showToast('完整报错已复制', 'success')
     } catch (err) {
       showToast(getClipboardFailureMessage('复制报错失败', err), 'error')
     }
+  }
+
+  const handleCopyDebugSnapshot = async () => {
+    try {
+      await copyTextToClipboard(buildTaskDebugSnapshot())
+      showToast('调试快照已复制', 'success')
+    } catch (err) {
+      showToast(getClipboardFailureMessage('复制快照失败', err), 'error')
+    }
+  }
+
+  const buildTaskDebugSnapshot = () => {
+    const snapshot = {
+      taskId: task.id,
+      status: task.status,
+      error: task.error || '生成失败',
+      createdAt: new Date(task.createdAt).toISOString(),
+      finishedAt: task.finishedAt ? new Date(task.finishedAt).toISOString() : null,
+      elapsed: task.elapsed,
+      provider: taskProviderName,
+      profile: taskProfileName,
+      apiMode: task.apiMode ?? null,
+      model: taskModel,
+      prompt: task.prompt,
+      params: task.params,
+      inputImageCount: task.inputImageIds.length,
+      outputImageCount: task.outputImages.length,
+      rawImageUrls: task.rawImageUrls ?? [],
+      rawResponsePayload: task.rawResponsePayload ?? null,
+      errorDebug: task.errorDebug ?? null,
+    }
+    return JSON.stringify(snapshot, null, 2)
+  }
+
+  const renderLineageTask = (lineageTask: TaskRecord, label: string, isCurrent = false) => {
+    const title = getTaskTitle(lineageTask)
+    const outputCount = lineageTask.outputImages?.length ?? 0
+    const content = (
+      <>
+        <div className="flex items-center justify-between gap-2">
+          <span className={`text-[10px] font-semibold uppercase tracking-wider ${
+            isCurrent ? 'text-blue-500 dark:text-blue-300' : 'text-gray-400 dark:text-gray-500'
+          }`}>
+            {label}
+          </span>
+          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] ${
+            lineageTask.status === 'done'
+              ? 'bg-green-50 text-green-600 dark:bg-green-500/10 dark:text-green-300'
+              : lineageTask.status === 'running'
+                ? 'bg-yellow-50 text-yellow-600 dark:bg-yellow-500/10 dark:text-yellow-300'
+                : 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-300'
+          }`}>
+            {getStatusLabel(lineageTask.status)}
+          </span>
+        </div>
+        <div className="mt-1 truncate text-left font-medium text-gray-800 dark:text-gray-100" title={title}>
+          {title}
+        </div>
+        <div className="mt-1 flex items-center gap-1.5 truncate text-[11px] text-gray-400 dark:text-gray-500">
+          <span className="truncate">{lineageTask.categoryName || '未分类'}</span>
+          <span>·</span>
+          <span>{formatTime(lineageTask.createdAt)}</span>
+          {outputCount > 0 && (
+            <>
+              <span>·</span>
+              <span>{outputCount} 张</span>
+            </>
+          )}
+        </div>
+      </>
+    )
+
+    if (isCurrent) {
+      return (
+        <div key={lineageTask.id} className="rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-2 text-xs dark:border-blue-500/20 dark:bg-blue-500/10">
+          {content}
+        </div>
+      )
+    }
+
+    return (
+      <button
+        key={lineageTask.id}
+        type="button"
+        onClick={() => setDetailTaskId(lineageTask.id)}
+        className="block w-full rounded-lg border border-gray-100 bg-white px-3 py-2 text-xs transition hover:border-blue-200 hover:bg-blue-50/70 dark:border-white/[0.06] dark:bg-white/[0.03] dark:hover:border-blue-500/20 dark:hover:bg-blue-500/10"
+      >
+        {content}
+      </button>
+    )
   }
 
   const handleCopyPrompt = async () => {
@@ -381,7 +547,7 @@ export default function DetailModal() {
       <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
       <div
         ref={modalRef}
-        className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
+        className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-4xl w-full max-h-[90vh] min-h-0 overflow-hidden flex flex-col md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex h-14 items-center justify-end px-4 md:hidden">
@@ -395,7 +561,7 @@ export default function DetailModal() {
         </div>
 
         {/* 左侧：图片 */}
-        <div className="md:w-1/2 w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem]">
+        <div className="md:w-1/2 w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem] min-w-0">
           {task.status === 'done' && outputLen > 0 && (
             <div className="absolute right-3 top-[15px] z-20 flex items-center gap-1.5">
               <div className="relative group flex">
@@ -617,6 +783,23 @@ export default function DetailModal() {
                     复制完整报错
                   </ViewportTooltip>
                 </div>
+                <div className="relative group">
+                  <button
+                    type="button"
+                    {...viewDebugSnapshotTooltip.handlers}
+                    onClick={(e) => {
+                      dismissAllTooltips()
+                      setShowDebugSnapshotModal(true)
+                    }}
+                    className="inline-flex items-center justify-center rounded-full border border-gray-200/80 bg-white/80 px-3 py-1.5 text-gray-600 transition hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-300 dark:hover:bg-white/[0.08]"
+                    aria-label="查看调试快照"
+                  >
+                    <CodeIcon className="h-4 w-4" />
+                  </button>
+                  <ViewportTooltip visible={viewDebugSnapshotTooltip.visible} className="whitespace-nowrap">
+                    查看调试快照
+                  </ViewportTooltip>
+                </div>
                 {task.rawResponsePayload && (
                   <div className="relative group">
                     <button
@@ -709,7 +892,7 @@ export default function DetailModal() {
         </div>
 
         {/* 右侧：信息 */}
-        <div className="md:w-1/2 w-full p-5 overflow-y-auto overscroll-contain flex flex-col">
+        <div className="md:w-1/2 w-full min-h-0 min-w-0 p-5 overflow-y-auto overscroll-contain flex flex-col">
           <button
             onClick={() => setDetailTaskId(null)}
             className="absolute top-3 right-3 hidden p-1 rounded-full hover:bg-gray-100 dark:hover:bg-white/[0.06] transition text-gray-400 z-10 md:block"
@@ -829,6 +1012,50 @@ export default function DetailModal() {
               </div>
             )}
 
+            {(task.categoryName || task.deletedAt || showLineage) && (
+              <div className="mb-4 space-y-2">
+                {task.categoryName && (
+                  <div className="rounded-lg bg-purple-50 px-3 py-2 text-xs dark:bg-purple-500/10">
+                    <span className="text-purple-400 dark:text-purple-300">分类</span>
+                    <br />
+                    <span className="font-medium text-purple-700 dark:text-purple-200">{task.categoryName}</span>
+                  </div>
+                )}
+                {task.deletedAt && (
+                  <div className="rounded-lg bg-red-50 px-3 py-2 text-xs dark:bg-red-500/10">
+                    <span className="text-red-400 dark:text-red-300">回收站</span>
+                    <br />
+                    <span className="font-medium text-red-700 dark:text-red-200">移入于 {formatTime(task.deletedAt)}</span>
+                  </div>
+                )}
+                {showLineage && (
+                  <div className="rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-white/[0.03]">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="text-gray-400 dark:text-gray-500">任务链路</span>
+                      {lineageChildren.length > 0 && (
+                        <span className="rounded-full bg-white px-2 py-0.5 text-[10px] text-gray-500 dark:bg-white/[0.05] dark:text-gray-400">
+                          {lineageChildren.length} 个后续
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-1.5">
+                      {parentMissing && (
+                        <div className="rounded-lg border border-dashed border-gray-200 bg-white/70 px-3 py-2 text-gray-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-400">
+                          上游任务已删除
+                        </div>
+                      )}
+                      {lineageAncestors.map((lineageTask, index) => renderLineageTask(lineageTask, `上游 ${index + 1}`))}
+                      {renderLineageTask(task, '当前', true)}
+                      {lineageChildren.map((lineageTask, index) => renderLineageTask(lineageTask, `后续 ${index + 1}`))}
+                    </div>
+                    {task.parentImageId && (
+                      <div className="mt-2 truncate text-[11px] text-gray-400 dark:text-gray-500">来源图片 {task.parentImageId}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* 参数 */}
             <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
               参数配置
@@ -886,34 +1113,57 @@ export default function DetailModal() {
           </div>
 
           {/* 操作按钮 */}
-          <div className="grid grid-cols-4 sm:flex gap-2 pt-4 border-t border-gray-100 dark:border-white/[0.08]">
+          <div className="grid grid-cols-4 gap-2 pt-4 border-t border-gray-100 dark:border-white/[0.08] sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_2.75rem]">
             <button
               onClick={handleReuse}
-              className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 transition text-sm font-medium whitespace-nowrap"
+              className="col-span-2 sm:col-span-1 min-w-0 flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 transition text-sm font-medium whitespace-nowrap"
             >
               <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
               </svg>
-              复用配置
+              <span className="min-w-0 truncate">复用配置</span>
             </button>
             <button
               onClick={handleEdit}
               disabled={!outputLen}
-              className="col-span-2 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
+              className="col-span-2 sm:col-span-1 min-w-0 flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
             >
               <EditIcon className="w-4 h-4 flex-shrink-0" />
-              编辑输出
+              <span className="min-w-0 truncate">编辑输出</span>
             </button>
+            {!task.deletedAt && (
+              <button
+                onClick={() => setShareToSquareTarget({ kind: 'task', taskId: task.id })}
+                disabled={task.status !== 'done' || !outputLen}
+                className="col-span-2 sm:col-span-1 min-w-0 flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition text-sm font-medium whitespace-nowrap"
+              >
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8a3 3 0 100-6 3 3 0 000 6zM17 14a3 3 0 100-6 3 3 0 000 6zM7 22a3 3 0 100-6 3 3 0 000 6zM9.6 6.6l4.8 2.8M14.4 12.6l-4.8 2.8" />
+                </svg>
+                <span className="min-w-0 truncate">分享</span>
+              </button>
+            )}
+            {task.deletedAt && (
+              <button
+                onClick={handleRestore}
+                className="col-span-2 sm:col-span-1 min-w-0 flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 transition text-sm font-medium whitespace-nowrap"
+              >
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+                <span className="min-w-0 truncate">恢复</span>
+              </button>
+            )}
             <button
               onClick={handleDelete}
-              className="col-span-3 sm:flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20 transition text-sm font-medium whitespace-nowrap"
+              className="col-span-3 sm:col-span-1 min-w-0 flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20 transition text-sm font-medium whitespace-nowrap"
             >
               <TrashIcon className="w-4 h-4 flex-shrink-0" />
-              删除记录
+              <span className="min-w-0 truncate">{taskView === 'trash' ? '彻底删除' : '删除记录'}</span>
             </button>
             <button
               onClick={handleToggleFavorite}
-              className={`col-span-1 sm:flex-none sm:w-11 w-full flex items-center justify-center rounded-xl transition ${
+              className={`col-span-1 sm:col-span-1 w-full flex items-center justify-center rounded-xl transition ${
                 task.isFavorite
                   ? 'bg-yellow-50 text-yellow-500 hover:bg-yellow-100 dark:bg-yellow-500/10 dark:hover:bg-yellow-500/20'
                   : 'bg-gray-50 text-gray-400 hover:bg-yellow-50 hover:text-yellow-500 dark:bg-white/[0.04] dark:hover:bg-yellow-500/10'
@@ -1004,6 +1254,124 @@ export default function DetailModal() {
         </div>
       )}
 
+      {showDebugSnapshotModal && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-6"
+          onPointerDown={(e) => {
+            debugSnapshotBackdropPointerDownRef.current = e.target === e.currentTarget
+          }}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (debugSnapshotBackdropPointerDownRef.current && e.target === e.currentTarget) setShowDebugSnapshotModal(false)
+            debugSnapshotBackdropPointerDownRef.current = false
+          }}
+        >
+          <div
+            ref={debugSnapshotModalRef}
+            className="flex w-full max-w-3xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]"
+            onPointerDown={(e) => {
+              if (!(e.target as Element).closest('[data-selectable-text]')) clearTextSelection()
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-white/[0.08] shrink-0">
+              <h3 className="text-base font-semibold text-gray-900 dark:text-white">错误快照</h3>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCopyDebugSnapshot}
+                  className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-50 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.08] transition-colors text-xs font-medium"
+                >
+                  <CopyIcon className="w-3.5 h-3.5" />
+                  复制快照
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDebugSnapshotModal(false)}
+                  className="rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-500 dark:hover:bg-white/[0.08] dark:hover:text-gray-300 transition-colors"
+                >
+                  <CloseIcon className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto bg-gray-50/50 p-4 dark:bg-black/20 sm:p-5 overscroll-contain">
+              <div data-selectable-text className="space-y-4 select-text">
+                <section className="rounded-xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-[#1c1c1e]">
+                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">错误信息</h4>
+                  <div className="space-y-1 text-xs text-gray-600 dark:text-gray-300">
+                    <p className="whitespace-pre-wrap break-words text-red-500 dark:text-red-300">{task.error || '生成失败'}</p>
+                    {task.errorDebug?.message && task.errorDebug.message !== task.error && (
+                      <p className="whitespace-pre-wrap break-words">{task.errorDebug.message}</p>
+                    )}
+                    <p className="text-gray-400 dark:text-gray-500">
+                      创建 {formatTime(task.createdAt)}
+                      {task.finishedAt ? ` · 结束 ${formatTime(task.finishedAt)}` : ''}
+                      {task.errorDebug?.createdAt ? ` · 快照 ${formatTime(task.errorDebug.createdAt)}` : ''}
+                    </p>
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-[#1c1c1e]">
+                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">请求配置</h4>
+                  <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                    <div>
+                      <div className="text-gray-400 dark:text-gray-500">Provider</div>
+                      <div className="mt-0.5 truncate font-medium text-gray-700 dark:text-gray-200">{taskProviderName}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-400 dark:text-gray-500">Profile</div>
+                      <div className="mt-0.5 truncate font-medium text-gray-700 dark:text-gray-200">{taskProfileName}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-400 dark:text-gray-500">Mode</div>
+                      <div className="mt-0.5 truncate font-medium text-gray-700 dark:text-gray-200">{task.apiMode || '未知'}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-400 dark:text-gray-500">Model</div>
+                      <div className="mt-0.5 truncate font-medium text-gray-700 dark:text-gray-200">{taskModel}</div>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-[#1c1c1e]">
+                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">参数</h4>
+                  <pre className="text-[11px] text-gray-600 dark:text-gray-300 font-mono whitespace-pre-wrap break-all">
+                    {JSON.stringify(task.params, null, 2)}
+                  </pre>
+                </section>
+
+                {rawImageUrls.length > 0 && (
+                  <section className="rounded-xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-[#1c1c1e]">
+                    <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">原始图片链接</h4>
+                    <pre className="text-[11px] text-gray-600 dark:text-gray-300 font-mono whitespace-pre-wrap break-all">
+                      {rawImageUrls.join('\n')}
+                    </pre>
+                  </section>
+                )}
+
+                {sanitizedRawResponsePayload && (
+                  <section className="rounded-xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-[#1c1c1e]">
+                    <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">原始响应</h4>
+                    <pre className="text-[11px] text-gray-600 dark:text-gray-300 font-mono whitespace-pre-wrap break-all">
+                      {sanitizedRawResponsePayload}
+                    </pre>
+                  </section>
+                )}
+
+                {task.errorDebug && (
+                  <section className="rounded-xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-[#1c1c1e]">
+                    <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">完整调试对象</h4>
+                    <pre className="text-[11px] text-gray-600 dark:text-gray-300 font-mono whitespace-pre-wrap break-all">
+                      {JSON.stringify(task.errorDebug, null, 2)}
+                    </pre>
+                  </section>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showRawResponseModal && task?.rawResponsePayload && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-6"
@@ -1053,7 +1421,7 @@ export default function DetailModal() {
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto p-5 bg-gray-50/50 dark:bg-black/20 overscroll-contain">
               <pre data-selectable-text className="text-[11px] sm:text-xs text-gray-600 dark:text-gray-300 font-mono whitespace-pre-wrap break-all select-text">
-                {task.rawResponsePayload.replace(/"(b64_json|base64|data)":\s*"[^"]+"/g, '"$1": "<base64_data>"')}
+                {sanitizedRawResponsePayload}
               </pre>
             </div>
           </div>

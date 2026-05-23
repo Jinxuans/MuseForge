@@ -76,6 +76,7 @@ export default function TaskCard({
   const [swipeDirection, setSwipeDirection] = useState<-1 | 0 | 1>(0)
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
+  const setShareToSquareTarget = useStore((s) => s.setShareToSquareTarget)
   const settings = useStore((s) => s.settings)
   const streamPreviewSrc = useStore((s) => s.streamPreviews[task.id] || '')
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
@@ -554,6 +555,22 @@ export default function TaskCard({
               onTouchCancel={(e) => e.stopPropagation()}
             >
               {/* API Name */}
+              {task.categoryName && (
+                <span
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-300 text-xs flex-shrink-0"
+                  title={task.categoryName}
+                >
+                  <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                  </svg>
+                  <span className="truncate max-w-[8rem]">{task.categoryName}</span>
+                </span>
+              )}
+              {task.deletedAt && (
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-50 dark:bg-red-500/10 text-red-500 dark:text-red-300 text-xs flex-shrink-0">
+                  回收站
+                </span>
+              )}
               {(task.apiProfileName || task.apiProvider) && (
                 <span 
                   className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 text-xs flex-shrink-0"
@@ -699,6 +716,18 @@ export default function TaskCard({
                   />
                 </svg>
               </TaskActionButton>
+              {task.status === 'done' && !task.deletedAt && (
+                <TaskActionButton
+                  tooltip="分享到广场"
+                  onClick={() => setShareToSquareTarget({ kind: 'task', taskId: task.id })}
+                  className="p-1.5 rounded-md hover:bg-indigo-50 dark:hover:bg-indigo-950/30 text-gray-400 hover:text-indigo-500 transition disabled:opacity-30"
+                  disabled={!task.outputImages?.length}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8a3 3 0 100-6 3 3 0 000 6zM17 14a3 3 0 100-6 3 3 0 000 6zM7 22a3 3 0 100-6 3 3 0 000 6zM9.6 6.6l4.8 2.8M14.4 12.6l-4.8 2.8" />
+                  </svg>
+                </TaskActionButton>
+              )}
               <TaskActionButton
                 tooltip="删除记录"
                 onClick={onDelete}

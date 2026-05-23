@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask } from '../store'
+import { useStore, reuseConfig, editOutputs, moveTasksToTrash, removeTask } from '../store'
 import TaskCard from './TaskCard'
 
 export default function TaskGrid() {
@@ -7,6 +7,8 @@ export default function TaskGrid() {
   const searchQuery = useStore((s) => s.searchQuery)
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
+  const taskView = useStore((s) => s.taskView)
+  const activeCategoryId = useStore((s) => s.activeCategoryId)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const selectedTaskIds = useStore((s) => s.selectedTaskIds)
@@ -34,6 +36,13 @@ export default function TaskGrid() {
     
     return sorted.filter((t) => {
       if (filterFavorite && !t.isFavorite) return false
+      if (taskView === 'trash') {
+        if (!t.deletedAt) return false
+      } else if (t.deletedAt) {
+        return false
+      }
+      if (activeCategoryId === '__uncategorized__' && t.categoryId) return false
+      if (activeCategoryId !== 'all' && activeCategoryId !== '__uncategorized__' && t.categoryId !== activeCategoryId) return false
       const matchStatus = filterStatus === 'all' || t.status === filterStatus
       if (!matchStatus) return false
       
@@ -42,12 +51,20 @@ export default function TaskGrid() {
       const paramStr = JSON.stringify(t.params).toLowerCase()
       return prompt.includes(q) || paramStr.includes(q)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite])
+  }, [tasks, searchQuery, filterStatus, filterFavorite, taskView, activeCategoryId])
 
   const handleDelete = (task: typeof tasks[0]) => {
+    if (taskView !== 'trash') {
+      setConfirmDialog({
+        title: '移入回收站',
+        message: '确定要把这条记录移入回收站吗？图片资源会保留，之后可以恢复或彻底删除。',
+        action: () => moveTasksToTrash([task.id]),
+      })
+      return
+    }
     setConfirmDialog({
-      title: '删除记录',
-      message: '确定要删除这条记录吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
+      title: '彻底删除记录',
+      message: '确定要彻底删除这条记录吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
       action: () => removeTask(task),
     })
   }
@@ -256,8 +273,10 @@ export default function TaskGrid() {
   if (!filteredTasks.length) {
     return (
       <div className="text-center py-20 text-gray-400 dark:text-gray-500">
-        {searchQuery || filterFavorite ? (
+        {searchQuery || filterFavorite || activeCategoryId !== 'all' ? (
           <p className="text-sm">没有找到匹配的记录</p>
+        ) : taskView === 'trash' ? (
+          <p className="text-sm">回收站是空的</p>
         ) : (
           <>
             <svg
@@ -306,8 +325,8 @@ export default function TaskGrid() {
                 setDetailTaskId(task.id)
               }}
               onReuse={() => reuseConfig(task)}
-              onEditOutputs={() => editOutputs(task)}
-              onDelete={() => handleDelete(task)}
+            onEditOutputs={() => editOutputs(task)}
+            onDelete={() => handleDelete(task)}
               isSelected={selectedTaskIds.includes(task.id)}
             />
           </div>

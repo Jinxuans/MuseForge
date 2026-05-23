@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, updateTaskInStore, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds } from '../store'
+import { useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, updateTaskInStore, removeMultipleTasks, moveTasksToTrash, restoreTasksFromTrash, getCachedImage, ensureImageCached, getActiveAgentRounds } from '../store'
 import { DEFAULT_PARAMS } from '../types'
 import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
@@ -411,6 +411,9 @@ export default function InputBar() {
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const searchQuery = useStore((s) => s.searchQuery)
+  const taskView = useStore((s) => s.taskView)
+  const activeCategoryId = useStore((s) => s.activeCategoryId)
+  const setMoveCategoryTaskIds = useStore((s) => s.setMoveCategoryTaskIds)
 
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
@@ -418,6 +421,13 @@ export default function InputBar() {
     
     return sorted.filter((t) => {
       if (filterFavorite && !t.isFavorite) return false
+      if (taskView === 'trash') {
+        if (!t.deletedAt) return false
+      } else if (t.deletedAt) {
+        return false
+      }
+      if (activeCategoryId === '__uncategorized__' && t.categoryId) return false
+      if (activeCategoryId !== 'all' && activeCategoryId !== '__uncategorized__' && t.categoryId !== activeCategoryId) return false
       const matchStatus = filterStatus === 'all' || t.status === filterStatus
       if (!matchStatus) return false
       
@@ -426,7 +436,7 @@ export default function InputBar() {
       const paramStr = JSON.stringify(t.params).toLowerCase()
       return prompt.includes(q) || paramStr.includes(q)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite])
+  }, [tasks, searchQuery, filterStatus, filterFavorite, taskView, activeCategoryId])
 
   const handleSelectAllToggle = useCallback(() => {
     if (selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0) {
@@ -457,13 +467,27 @@ export default function InputBar() {
 
   const handleDeleteSelected = useCallback(() => {
     setConfirmDialog({
-      title: '批量删除',
-      message: `确定要删除选中的 ${selectedTaskIds.length} 条记录吗？`,
+      title: taskView === 'trash' ? '彻底删除' : '移入回收站',
+      message: taskView === 'trash'
+        ? `确定要彻底删除选中的 ${selectedTaskIds.length} 条记录吗？`
+        : `确定要把选中的 ${selectedTaskIds.length} 条记录移入回收站吗？`,
       action: () => {
-        removeMultipleTasks(selectedTaskIds)
+        if (taskView === 'trash') {
+          removeMultipleTasks(selectedTaskIds)
+        } else {
+          moveTasksToTrash(selectedTaskIds)
+        }
       },
     })
-  }, [selectedTaskIds, setConfirmDialog])
+  }, [selectedTaskIds, setConfirmDialog, taskView])
+
+  const handleRestoreSelected = useCallback(() => {
+    restoreTasksFromTrash(selectedTaskIds)
+  }, [selectedTaskIds])
+
+  const handleMoveSelectedToCategory = useCallback(() => {
+    setMoveCategoryTaskIds(selectedTaskIds)
+  }, [selectedTaskIds, setMoveCategoryTaskIds])
 
   const handleDownloadSelected = useCallback(async () => {
     const selectedTasks = tasks.filter((t) => selectedTaskIds.includes(t.id))
@@ -1999,6 +2023,34 @@ export default function InputBar() {
                 )}
               </button>
               <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
+              {taskView === 'trash' && (
+                <>
+                  <button
+                    onClick={handleRestoreSelected}
+                    className="p-2 text-blue-500 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 transition-colors"
+                    title="恢复选中"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                    </svg>
+                  </button>
+                  <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
+                </>
+              )}
+              {taskView !== 'trash' && (
+                <>
+                  <button
+                    onClick={handleMoveSelectedToCategory}
+                    className="p-2 text-purple-500 dark:text-purple-400 hover:text-purple-600 dark:hover:text-purple-300 transition-colors"
+                    title="移动分类"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                    </svg>
+                  </button>
+                  <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
+                </>
+              )}
               <button
                 onClick={handleDownloadSelected}
                 className="p-2 text-green-500 dark:text-green-400 hover:text-green-600 dark:hover:text-green-300 transition-colors"
