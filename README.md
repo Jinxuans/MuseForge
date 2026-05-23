@@ -4,7 +4,7 @@ MuseForge 是一个开源 AI 创作平台，当前以图片生成和编辑为核
 
 项目采用 Go + React/Vite 实现，不再依赖 PHP，并适配为由 Go 服务托管前端构建产物和同源 `/v1` 代理转发。
 
-源码层面前后端分离，部署时由 Go 二进制托管前端构建产物：
+源码层面前后端分离，部署时由 Go 二进制托管前端构建产物。`web/dist` 是本地构建产物，不提交到仓库；运行或编译 Go 服务前需要先执行前端构建：
 
 - 页面入口：`http://127.0.0.1:5000/`
 - 健康检查：`http://127.0.0.1:5000/health`
@@ -38,7 +38,7 @@ MuseForge 是一个开源 AI 创作平台，当前以图片生成和编辑为核
 
 ## 运行
 
-首次运行前先构建前端：
+首次运行前先构建前端。`go run ./cmd/server` 会通过 Go embed 托管 `web/dist`，因此未生成 `web/dist` 时 Go 编译会失败：
 
 ```powershell
 cd web; npm install
@@ -246,7 +246,7 @@ migrations/          数据库迁移
 web/                 React/Vite 前端工程
 web/src/             完整 React 前端应用
 web/public/          PWA manifest、图标和 service worker
-web/dist/            前端构建产物，由 Go embed 打包
+web/dist/            前端本地构建产物，由 Go embed 打包，不提交到仓库
 ```
 
 ## 许可说明
