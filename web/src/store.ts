@@ -1638,6 +1638,7 @@ export const useStore = create<AppState>()(
       },
     }),
     {
+      // Keep the legacy key so existing local settings/tasks survive the MuseForge rebrand.
       name: 'gpt-image-playground',
       version: 2,
       migrate: (persistedState) => migratePersistedState(persistedState),
@@ -4666,7 +4667,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `gpt-image-playground-backup_${formatExportFileTime(new Date(exportedAt))}.zip`
+    a.download = `museforge-backup_${formatExportFileTime(new Date(exportedAt))}.zip`
     a.click()
     URL.revokeObjectURL(url)
     useStore.getState().showToast('数据已导出', 'success')

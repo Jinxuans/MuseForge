@@ -69,7 +69,7 @@ func main() {
 
 	srv := httpapi.New(cfg, web.StaticFS(), repo, providerRepo, worker, store)
 
-	fmt.Printf("GPT image Go server listening on http://127.0.0.1%s\n", cfg.Addr)
+	fmt.Printf("MuseForge server listening on http://127.0.0.1%s\n", cfg.Addr)
 	slog.Info("server listening", "addr", cfg.Addr)
 	if err := http.ListenAndServe(cfg.Addr, srv); err != nil {
 		panic(err)
