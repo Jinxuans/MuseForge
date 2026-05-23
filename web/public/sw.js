@@ -1,4 +1,4 @@
-const CACHE_NAME = 'museforge-v0.4.3'
+const CACHE_NAME = 'museforge-v0.1.0'
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './pwa-icon.svg']
 
 self.addEventListener('install', (event) => {
