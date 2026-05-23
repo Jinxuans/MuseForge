@@ -246,10 +246,10 @@ function parseResponsesImageResults(payload: ResponsesApiResponse, fallbackMime:
   for (const item of output) {
     if (item?.type !== 'image_generation_call') continue
 
-    const result = item.result
-    if (typeof result === 'string' && result.trim()) {
+    const b64 = getResponsesImageResultBase64(item.result)
+    if (b64) {
       results.push({
-        image: normalizeBase64Image(result, fallbackMime),
+        image: normalizeBase64Image(b64, fallbackMime),
         actualParams: mergeActualParams(pickActualParams(item)),
         revisedPrompt: typeof item.revised_prompt === 'string' ? item.revised_prompt : undefined,
       })
@@ -263,6 +263,24 @@ function parseResponsesImageResults(payload: ResponsesApiResponse, fallbackMime:
   }
 
   return results
+}
+
+function getResponsesImageResultBase64(result: ResponsesOutputItem['result']): string | undefined {
+  const b64 = typeof result === 'string'
+    ? result
+    : result && typeof result === 'object'
+      ? typeof result.b64_json === 'string'
+        ? result.b64_json
+        : typeof result.base64 === 'string'
+          ? result.base64
+          : typeof result.image === 'string'
+            ? result.image
+            : typeof result.data === 'string'
+              ? result.data
+              : ''
+      : ''
+
+  return b64.trim() ? b64 : undefined
 }
 
 async function parseImagesApiResponse(payload: ImageApiResponse, mime: string, signal?: AbortSignal): Promise<CallApiResult> {
@@ -422,7 +440,14 @@ async function parseResponsesApiStreamResponse(
   const payload = completedPayload ?? (outputItems.length ? { output: outputItems } : null)
   if (!payload) throw new Error('流式接口未返回最终图片数据')
 
-  const imageResults = parseResponsesImageResults(payload, mime)
+  let imageResults: ReturnType<typeof parseResponsesImageResults>
+  try {
+    imageResults = parseResponsesImageResults(payload, mime)
+  } catch (err) {
+    const collectedImageItems = outputItems.filter((item) => getResponsesImageResultBase64(item.result))
+    if (collectedImageItems.length === 0) throw err
+    imageResults = parseResponsesImageResults({ output: collectedImageItems }, mime)
+  }
   const actualParams = mergeActualParams(imageResults[0]?.actualParams ?? {})
   return {
     images: imageResults.map((result) => result.image),
