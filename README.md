@@ -41,8 +41,8 @@ MuseForge 是一个开源 AI 创作平台，当前以图片生成和编辑为核
 首次运行前先构建前端。`go run ./cmd/server` 会通过 Go embed 托管 `web/dist`，因此未生成 `web/dist` 时 Go 编译会失败：
 
 ```powershell
-cd web; npm install
-cd web; npm run build
+npm install --prefix web
+npm run build --prefix web
 ```
 
 启动 Go 服务：
@@ -133,7 +133,7 @@ go run ./cmd/server
 异步任务需要 PostgreSQL，可写入 `.env`：
 
 ```powershell
-DATABASE_URL=postgres://user:password@127.0.0.1:5432/gpt_image_go?sslmode=disable
+DATABASE_URL=postgres://user:password@127.0.0.1:5432/museforge?sslmode=disable
 DATA_DIR=./data
 WORKER_CONCURRENCY=2
 TASK_MAX_ATTEMPTS=3
@@ -142,7 +142,7 @@ CLEANUP_INTERVAL_MINUTES=30
 CLEANUP_BATCH_SIZE=200
 LOG_LEVEL=info
 LOG_FORMAT=json
-cd web; npm run build
+npm run build --prefix web
 go run ./cmd/server
 ```
 
@@ -194,7 +194,7 @@ Cache API 缓存 /files/* 图片响应
 
 ```text
 广场前端使用 /api/v1 协议访问远端分享服务
-设置 VITE_SQUARE_API_URL 后，前端会读取 /api/v1/square、/api/v1/shares 等接口
+构建前设置 VITE_SQUARE_API_URL 后，前端会读取 /api/v1/square、/api/v1/shares 等接口
 未设置 VITE_SQUARE_API_URL 时，广场页面会显示等待连接状态，不影响本地画廊和 Agent
 当前仓库已移植广场前端界面、分享弹窗和 Share Manifest 构建逻辑
 广场后端建议后续由 MuseForge 的 Go 服务实现同一套 /api/v1 协议
@@ -229,8 +229,8 @@ LOG_FORMAT 支持 text/json，生产环境建议 json
 ## 编译
 
 ```powershell
-cd web; npm run build
-go build -buildvcs=false -o gpt-image-go.exe ./cmd/server
+npm run build --prefix web
+go build -buildvcs=false -o museforge.exe ./cmd/server
 ```
 
 ## 目录结构

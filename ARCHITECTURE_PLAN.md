@@ -1,46 +1,50 @@
 # 架构与产品演进计划
 
-本文档记录当前项目从单页工具演进为可上线创作平台的计划。目标是先快速上线异步图片生成能力，同时为后续用户体系、官方中转站通道、社区分享和运营后台预留清晰边界。
+本文档记录 MuseForge 的目标架构、当前已落地能力和后续产品演进方向。项目已经完成从早期单页工具到 Go + React/Vite 模块化单体的迁移，后续重点是补齐分享广场后端、用户体系、社区发布和运营能力。
 
-## 目标形态
+## 当前形态
 
 源码层面前后端分离，部署层面保持一个 Go 程序启动：
 
 ```text
-React/Vite 前端 -> build 到 web/dist
+React/Vite 前端 -> 构建生成 web/dist
 Go 后端 -> embed web/dist
-运行时只启动 app.exe / app
+运行时只启动 museforge.exe / museforge
 ```
 
-第一版保留：
+`web/dist` 是本地构建产物，由 `npm run build --prefix web` 生成，不提交到仓库。由于 Go 使用 `//go:embed all:dist`，运行或编译 Go 服务前必须先生成 `web/dist`。
+
+当前已具备：
 
 ```text
-Base URL + API Key
-异步任务
-服务端图库
-关闭浏览器后任务继续执行
+同步图片生成、编辑和 Responses API 代理
+异步生成和编辑任务
+服务端图库与本地浏览器缓存
+匿名客户端隔离
+渠道配置
+任务重试、错误快照和日志脱敏
+提示词库、分类、收藏、回收站、任务链
+图片分享广场前端界面、分享弹窗和 Share Manifest 构建逻辑
 ```
 
-后期扩展：
+当前尚未具备：
 
 ```text
-用户体系
-保存多个渠道配置
-官方中转站通道
-社区发布
+Go 内置分享广场后端
+登录用户体系
+图库作品发布为社区内容
 点赞、收藏、评论
-积分和计费
-后台审核和运营
+积分、计费和运营后台
 ```
 
 ## 技术选型
 
 ```text
-前端：React + Vite + TypeScript + TanStack Query
-后端：Go + chi
+前端：React + Vite + TypeScript + Zustand + Vitest
+后端：Go 标准库 net/http 模块化单体
 数据库：PostgreSQL
-存储：Storage 接口，先本地文件，后续可换 S3/R2/OSS
-任务：Go 进程内 worker pool，任务状态落数据库
+存储：本地文件存储，后续可替换为 S3/R2/OSS
+任务：Go 进程内 worker pool，任务状态落 PostgreSQL
 部署：单 Go 二进制 + .env + data/ 或对象存储
 ```
 
@@ -48,36 +52,32 @@ Base URL + API Key
 
 ## 工程结构
 
-建议目标结构：
+当前主要结构：
 
 ```text
-project/
-  cmd/server/main.go
-  internal/
-    httpapi/
-    auth/
-    tasks/
-    assets/
-    providers/
-    storage/
-    worker/
-    db/
-    config/
-  web/
-    package.json
-    src/
-    dist/
-  migrations/
-  data/
-  go.mod
+cmd/server/          Go 程序入口
+internal/config/     配置和 .env 读取
+internal/db/         PostgreSQL 连接和迁移
+internal/httpapi/    HTTP API、同步代理和静态文件托管
+internal/providers/  渠道配置仓库
+internal/redact/     敏感信息脱敏
+internal/storage/    本地文件存储
+internal/tasks/      任务仓库、worker 和清理器
+migrations/          数据库迁移
+web/                 React/Vite 前端工程
+web/src/             前端源码
+web/public/          PWA manifest、图标和 service worker
+web/dist/            本地构建产物，忽略入库
+data/                本地上传和生成结果，运行时产生
 ```
 
 生产构建：
 
 ```powershell
-cd web; npm run build
-go build -o app ./cmd/server
-.\app
+npm install --prefix web
+npm run build --prefix web
+go build -buildvcs=false -o museforge.exe ./cmd/server
+.\museforge.exe
 ```
 
 ## 产品边界
@@ -92,7 +92,7 @@ go build -o app ./cmd/server
 负责用户、任务、图片资产、图库、作品、社区、评论、点赞、收藏和审核。
 ```
 
-图片平台可以调用自己的中转站，也可以兼容其他中转站。两者不应强耦合。
+MuseForge 可以调用自己的中转站，也可以兼容其他 OpenAI-compatible 中转站。两者不应强耦合。
 
 ## 核心概念
 
@@ -103,92 +103,29 @@ task：
 asset：
 生成出来的图片文件或上传文件。
 
+prompt：
+可复用、可收藏、可分享的提示词。
+
+share：
+用户主动分享到广场的任务或提示词。
+
 work：
-用户主动发布到社区的作品。
+后续用户主动发布到社区的正式作品。
 ```
 
-不要把历史记录直接等同于社区作品。用户应先生成图片，再从图库选择是否发布。
+不要把历史记录直接等同于社区作品。用户应先生成图片，再从图库或任务中选择是否分享或发布。
 
-## 核心数据表
+## 后端 API
 
-第一版就按未来平台设计，即使部分表暂时不启用。
-
-```text
-users
-- id
-- email / username
-- password_hash
-- role
-- created_at
-
-provider_profiles
-- id
-- user_id nullable
-- name
-- type: custom / official / temporary
-- base_url
-- api_key_plaintext nullable
-- api_key_hint
-- created_at
-- deleted_at
-
-tasks
-- id
-- user_id nullable
-- anonymous_token_hash nullable
-- provider_profile_id nullable
-- provider_base_url_snapshot
-- type: generation / edit
-- model
-- prompt
-- params_json
-- status: queued / running / succeeded / failed / canceled
-- error
-- cost_estimate
-- created_at
-- started_at
-- completed_at
-
-assets
-- id
-- user_id nullable
-- task_id
-- storage_key
-- public_url
-- mime
-- width
-- height
-- size_bytes
-- sha256
-- created_at
-
-works
-- id
-- user_id
-- cover_asset_id
-- title
-- description
-- visibility: private / unlisted / public
-- prompt_visible
-- created_at
-- published_at
-
-usage_logs
-- id
-- user_id nullable
-- task_id
-- provider
-- model
-- amount
-- raw_json
-- created_at
-```
-
-## 后端 API 规划
-
-第一版 API：
+当前已落地 API：
 
 ```text
+POST   /v1/images/generations
+POST   /images/generations
+POST   /v1/images/edits
+POST   /images/edits
+POST   /v1/responses
+
 POST   /api/tasks/generations
 POST   /api/tasks/edits
 GET    /api/tasks
@@ -196,15 +133,30 @@ GET    /api/tasks/{id}
 POST   /api/tasks/{id}/cancel
 
 GET    /api/assets
-GET    /api/assets/{id}
 DELETE /api/assets/{id}
-
 GET    /files/{asset_id}
 
-GET    /api/health
+GET    /api/provider-profiles
+POST   /api/provider-profiles
+DELETE /api/provider-profiles/{id}
+
+GET    /health
 ```
 
-用户和渠道阶段：
+分享广场前端当前按远端服务协议访问：
+
+```text
+GET    /api/v1/square
+GET    /api/v1/me/shares
+GET    /api/v1/shares/{id}
+POST   /api/v1/shares
+POST   /api/v1/shares/{id}/delete
+POST   /api/v1/identity
+```
+
+这些 `/api/v1` 分享接口尚未由当前 Go 服务实现。构建前设置 `VITE_SQUARE_API_URL` 后，前端会访问对应远端分享服务；未设置时只显示等待连接状态。
+
+后续用户和社区阶段计划：
 
 ```text
 POST   /api/auth/register
@@ -212,14 +164,6 @@ POST   /api/auth/login
 POST   /api/auth/logout
 GET    /api/me
 
-GET    /api/provider-profiles
-POST   /api/provider-profiles
-DELETE /api/provider-profiles/{id}
-```
-
-社区阶段：
-
-```text
 POST   /api/works
 GET    /api/works
 GET    /api/works/{id}
@@ -228,22 +172,45 @@ POST   /api/works/{id}/favorite
 POST   /api/works/{id}/comments
 ```
 
-## 异步任务流程
+## 数据模型
+
+当前已落地或预留的核心表：
+
+```text
+provider_profiles
+tasks
+assets
+```
+
+后续平台化建议补齐：
+
+```text
+users
+works
+work_assets
+comments
+favorites
+likes
+usage_logs
+audit_logs
+```
+
+分享广场后端如果落到 MuseForge Go 服务中，建议单独建模 `shares` 与 `share_assets`，避免直接把本地任务表暴露成公开社区表。
+
+## 任务流程
 
 生成任务：
 
 ```text
-用户提交 prompt、参数、Base URL、API Key
+用户提交 prompt、参数和渠道
 后端创建 task，状态 queued
-如果是临时 Key，明文保存到 temporary provider
 worker 取任务，状态改为 running
 worker 调上游 /images/generations
 上游返回 b64_json 或 url
 后端统一保存成图片文件
 写入 assets
 任务状态改为 succeeded
-任务完成后删除临时 Key，保存渠道的 Key 继续保留
-前端轮询 /api/tasks/{id} 或刷新任务列表
+前端刷新任务列表和图库
 ```
 
 编辑任务：
@@ -251,12 +218,13 @@ worker 调上游 /images/generations
 ```text
 用户上传原图和可选 mask
 后端先保存 uploads/task_id/
-创建 task
+创建 edit task
 worker 从磁盘读取上传文件
 调用上游 /images/edits
 保存结果图
 写入 assets
 更新 task 状态
+任务终态后清理上传原图
 ```
 
 任务状态固定为：
@@ -269,58 +237,32 @@ failed
 canceled
 ```
 
-## Base URL 和 API Key 策略
-
-第一版保留用户自带渠道，以便兼容其他中转站用户。
-
-```text
-访客：
-提交任务时带 Base URL 和 API Key。
-后端仅为本次任务临时明文保存。
-任务完成后删除临时 Key。
-
-登录用户：
-可选择保存多个渠道配置。
-Key 明文入库，前端只展示尾号。
-用户可随时删除。
-
-官方通道：
-后期接入自己的中转站。
-新用户默认推荐官方通道。
-老用户仍可继续使用自带渠道。
-```
-
-安全要求：
+## 安全策略
 
 ```text
 API Key 不能出现在日志中
 前端不能回显完整 Key
 任务完成后删除临时 Key
-Base URL 默认只允许 https
-拦截 localhost、127.0.0.1、内网 IP、file:// 等 SSRF 风险地址
-任务失败日志不能包含 Authorization
+公开部署可设置 STRICT_UPSTREAM_SECURITY=1 开启严格 SSRF 防护
+严格模式会拦截 localhost、127.0.0.1、内网 IP、link-local、multicast 等地址
+严格模式会解析域名到 IP 后再次检查
+严格模式下如必须使用 http 上游，可显式设置 ALLOW_INSECURE_UPSTREAMS=1
 ```
 
-风险说明：
+当前按业务决策保留“用户自带渠道”和“保存渠道”能力。保存渠道的 Key 仍应在更开放的公网产品阶段迁移为加密存储或托管凭据。
+
+## 前端页面
+
+当前前端主要模式：
 
 ```text
-第一版按业务决策明文存储 API Key。
-这会让数据库、备份和管理员查询具备读取完整 Key 的能力。
-后期如果产品开放给更多外部用户，建议再迁移为加密存储。
+图库：分类、收藏、回收站、任务链、批量选择、右键菜单
+Agent：多轮图片创作、引用历史图片、Responses API
+广场：浏览分享、查看详情、复用提示词、发起分享
+设置：渠道、本地数据、缓存管理
 ```
 
-## 前端页面规划
-
-第一版：
-
-```text
-/create      生成和编辑页面
-/tasks       任务队列和状态
-/gallery     我的图库
-/settings    Base URL / Key / 渠道设置
-```
-
-后期：
+后续建议：
 
 ```text
 /login
@@ -328,15 +270,6 @@ Base URL 默认只允许 https
 /work/:id
 /explore
 /admin
-```
-
-第一版交互：
-
-```text
-提交任务后立即显示“任务已提交，可以关闭页面”
-任务列表显示 queued / running / succeeded / failed
-图库从服务端 assets 加载
-生成完成后自动出现在图库
 ```
 
 ## 存储策略
@@ -350,7 +283,7 @@ URL()
 Delete()
 ```
 
-第一版可以使用本地文件：
+当前本地文件布局：
 
 ```text
 data/
@@ -364,79 +297,28 @@ data/
       1.png
 ```
 
-后期切换到 S3/R2/OSS 时，只替换 Storage 实现，不改任务和图库业务。
+后期切换到 S3/R2/OSS 时，应只替换 Storage 实现，尽量不改任务和图库业务。
 
-## 上线阶段
+## 演进阶段
 
-### 阶段 1：工程迁移
+已完成：
 
 ```text
-单 index.html 迁移到 React/Vite
-Go 改成正式路由结构
-Go 托管前端静态文件
-功能先保持同步可用
+阶段 1：工程迁移到 React/Vite + Go 模块化后端
+阶段 2：异步生成
+阶段 3：异步编辑
+阶段 4：服务端图库
+阶段 5：渠道配置、安全加固、匿名客户端隔离
+阶段 6：前端创作体验增强和 GPT_Image_Playground 分享广场前端移植
 ```
 
-### 阶段 2：异步生成
+下一步建议：
 
 ```text
-加入 PostgreSQL
-加入任务表、资产表、worker
-生成任务支持关闭浏览器后继续执行
-结果图片保存到服务端
-```
-
-### 阶段 3：异步编辑
-
-```text
-上传文件持久化
-编辑任务后台执行
-支持 mask 和多图输入
-```
-
-### 阶段 4：服务端图库
-
-```text
-图库从后端读取
-IndexedDB 仅作为缓存或旧数据导入来源
-支持删除资产
-```
-
-### 阶段 5：渠道配置
-
-```text
-支持临时 Base URL / API Key
-登录用户可保存多个渠道
-预留官方渠道
-```
-
-### 阶段 6：用户体系
-
-```text
-账号密码登录
-session cookie
-任务和图片绑定 user_id
-访客任务后续可认领到账号
-```
-
-### 阶段 7：社区
-
-```text
-图库图片发布为作品
-公开作品流
-点赞、收藏、评论
-用户主页
-```
-
-### 阶段 8：官方中转站和运营
-
-```text
-默认官方通道
-积分和额度
-后台任务排查
-用户管理
-内容审核
-失败率和成本统计
+阶段 7：实现 MuseForge 自有分享广场后端，兼容当前 /api/v1 协议
+阶段 8：登录用户体系与资产归属
+阶段 9：社区作品流、互动和审核
+阶段 10：官方中转站、积分额度和运营后台
 ```
 
 ## 部署计划
@@ -458,8 +340,9 @@ DATA_DIR=./data
 STORAGE_DRIVER=local
 WORKER_CONCURRENCY=2
 MAX_UPLOAD_MB=64
-DEFAULT_PROVIDER_BASE_URL=你的中转站地址，可为空
-DEFAULT_PROVIDER_API_KEY=官方内部 token，可为空
+OPENAI_BASE_URL=你的中转站地址，可为空
+OPENAI_API_KEY=默认 API Key，可为空
+VITE_SQUARE_API_URL=远端分享广场服务地址，可为空，需在前端构建前设置
 ```
 
 如果使用本地磁盘存储，需要备份：
@@ -469,11 +352,11 @@ PostgreSQL
 data/
 ```
 
-如果准备公开社区，建议尽早切到对象存储。
+如果准备公开社区或长期保存分享图片，建议尽早切到对象存储。
 
 ## 上线验收标准
 
-第一版上线前至少满足：
+第一版公开部署前至少满足：
 
 ```text
 关闭浏览器后任务仍继续执行
@@ -481,22 +364,9 @@ data/
 图片结果保存在服务端
 用户 Key 不出现在日志
 前端不回显完整 Key
-Base URL 有 SSRF 防护
+Base URL 严格模式可开启 SSRF 防护
 任务失败能看到明确错误
 Go 单程序可启动完整站点
+web/dist 由构建步骤生成，不进入仓库
+第三方来源和 MIT 许可保留在 THIRD_PARTY_NOTICES.md
 ```
-
-## 当前建议
-
-下一步优先做 MVP：
-
-```text
-React/Vite 前端
-Go 模块化后端
-PostgreSQL
-异步任务
-服务端图库
-自带 Base URL / API Key
-```
-
-社区和官方通道先预留数据模型和接口边界，不急着实现界面。
