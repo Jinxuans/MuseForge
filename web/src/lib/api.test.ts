@@ -440,6 +440,26 @@ describe('callImageApi', () => {
     expect((init as RequestInit).cache).toBe('no-store')
   })
 
+  it('omits Authorization when the active profile has no API key', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      data: [{ b64_json: 'aW1hZ2U=' }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await callImageApi({
+      settings: { ...DEFAULT_SETTINGS, apiKey: '' },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })
+
+    const [, init] = fetchMock.mock.calls[0]
+    const headers = (init as RequestInit).headers as Record<string, string>
+    expect(headers).not.toHaveProperty('Authorization')
+  })
+
   it('ignores stored API proxy settings when the current deployment has no proxy', async () => {
     vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'false')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({

@@ -79,6 +79,34 @@ describe('callAgentResponsesApi', () => {
     expect(body.tools[0].input_image_mask).toEqual({ image_url: 'data:image/png;base64,bWFzaw==' })
   })
 
+  it('omits Authorization when the Agent profile has no API key', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{
+        type: 'message',
+        content: [{ type: 'output_text', text: 'OK' }],
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const profile = createDefaultOpenAIProfile({
+      apiKey: '',
+      apiMode: 'responses',
+    })
+
+    await callAgentResponsesApi({
+      settings: DEFAULT_SETTINGS,
+      profile,
+      params: DEFAULT_PARAMS,
+      input: [{ role: 'user', content: [{ type: 'input_text', text: 'prompt' }] }],
+    })
+
+    const [, init] = fetchMock.mock.calls[0]
+    const headers = (init as RequestInit).headers as Record<string, string>
+    expect(headers).toMatchObject({ 'Content-Type': 'application/json' })
+    expect(headers).not.toHaveProperty('Authorization')
+  })
+
   it('extracts image_generation results from base64 object fields', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       output: [{

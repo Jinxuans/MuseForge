@@ -1,6 +1,6 @@
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
-import { getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } from './imageApiShared'
+import { createAuthorizationHeaders, getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } from './imageApiShared'
 
 export interface AgentApiMessage {
   role: 'user' | 'assistant'
@@ -77,7 +77,7 @@ const AGENT_TITLE_MAX_LENGTH = 28
 
 function createHeaders(profile: ApiProfile): Record<string, string> {
   return {
-    Authorization: `Bearer ${profile.apiKey}`,
+    ...createAuthorizationHeaders(profile.apiKey),
     'Content-Type': 'application/json',
   }
 }

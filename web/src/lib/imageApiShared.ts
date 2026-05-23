@@ -46,6 +46,14 @@ export function normalizeBase64Image(value: string, fallbackMime: string): strin
   return value.startsWith('data:') ? value : `data:${fallbackMime};base64,${value}`
 }
 
+export function createAuthorizationHeaders(apiKey: string): Record<string, string> {
+  const trimmed = apiKey.trim()
+  if (!trimmed) return {}
+  return {
+    Authorization: trimmed.toLowerCase().startsWith('bearer ') ? trimmed : `Bearer ${trimmed}`,
+  }
+}
+
 function formatMiB(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MiB`
 }

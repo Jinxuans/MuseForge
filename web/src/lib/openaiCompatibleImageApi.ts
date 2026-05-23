@@ -4,6 +4,7 @@ import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devP
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
+  createAuthorizationHeaders,
   type CallApiOptions,
   type CallApiResult,
   fetchImageUrlAsDataUrl,
@@ -81,9 +82,7 @@ function normalizeImageApiPayload(value: unknown): ImageApiResponse {
 }
 
 function createRequestHeaders(profile: ApiProfile): Record<string, string> {
-  return {
-    Authorization: `Bearer ${profile.apiKey}`,
-  }
+  return createAuthorizationHeaders(profile.apiKey)
 }
 
 function isEventStreamResponse(response: Response): boolean {
