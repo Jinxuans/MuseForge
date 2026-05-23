@@ -1,7 +1,6 @@
 import type { AgentConversation, TaskRecord, StoredImage, StoredImageThumbnail } from '../types'
 
-// Keep the legacy database name so existing browser-side history remains readable after the MuseForge rebrand.
-const DB_NAME = 'gpt-image-playground'
+const DB_NAME = 'museforge'
 const DB_VERSION = 3
 const STORE_TASKS = 'tasks'
 const STORE_IMAGES = 'images'

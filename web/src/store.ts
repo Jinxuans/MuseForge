@@ -1638,8 +1638,7 @@ export const useStore = create<AppState>()(
       },
     }),
     {
-      // Keep the legacy key so existing local settings/tasks survive the MuseForge rebrand.
-      name: 'gpt-image-playground',
+      name: 'museforge',
       version: 2,
       migrate: (persistedState) => migratePersistedState(persistedState),
       partialize: getPersistedState,
