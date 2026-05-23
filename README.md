@@ -2,12 +2,15 @@
 
 MuseForge 是一个开源 AI 创作平台，当前以图片生成和编辑为核心，后续可扩展多模型工作流与视频生成能力。
 
-项目采用 Go + React/Vite 实现，不再依赖 PHP。源码层面前后端分离，部署时由 Go 二进制托管前端构建产物：
+项目采用 Go + React/Vite 实现，不再依赖 PHP，并适配为由 Go 服务托管前端构建产物和同源 `/v1` 代理转发。
+
+源码层面前后端分离，部署时由 Go 二进制托管前端构建产物：
 
 - 页面入口：`http://127.0.0.1:5000/`
 - 健康检查：`http://127.0.0.1:5000/health`
-- 图片生成：`POST /images/generations`
-- 图片编辑：`POST /images/edits`
+- 图片生成：`POST /v1/images/generations` 或 `POST /images/generations`
+- 图片编辑：`POST /v1/images/edits` 或 `POST /images/edits`
+- Responses API：`POST /v1/responses`
 - 异步生成：`POST /api/tasks/generations`
 - 异步编辑：`POST /api/tasks/edits`
 - 任务列表：`GET /api/tasks`
@@ -19,18 +22,16 @@ MuseForge 是一个开源 AI 创作平台，当前以图片生成和编辑为核
 
 浏览器首次打开时会在本地生成一个匿名客户端 ID，前端请求会自动携带 `X-Client-ID`。服务端按该 ID 隔离已保存渠道、任务列表和图库资产；不同浏览器不会看到彼此保存的渠道和生成记录。这个机制用于匿名隔离，不等同于登录鉴权。
 
-根路径和 `legacy.html` 都支持通过 URL 预填临时渠道：
+根路径支持通过 URL 预填临时 API 配置：
 
 ```text
-/index.html?address=https://api.example.com/v1&key=sk-xxx
-/legacy.html?address=https://api.example.com/v1&key=sk-xxx
+/index.html?apiUrl=https://api.example.com/v1&apiKey=sk-xxx
 ```
 
-如果同时传入 `name`、`channel` 或 `channel_name`，页面会把该地址和 Key 保存为当前浏览器的渠道并自动选中；渠道名允许重复：
+也可以传入模型、API 模式等参数：
 
 ```text
-/index.html?address=https://api.example.com/v1&key=sk-xxx&name=TokenFlux
-/legacy.html?address=https://api.example.com/v1&key=sk-xxx&name=TokenFlux
+/index.html?apiUrl=https://api.example.com/v1&apiKey=sk-xxx&apiMode=responses&model=gpt-5.5
 ```
 
 后续架构和产品演进计划见 [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md)。
@@ -77,6 +78,7 @@ Vite 会把后端请求统一代理到 `VITE_BACKEND_URL`，默认是 `http://12
 ```text
 /api
 /images
+/v1
 /files
 /health
 ```
@@ -144,9 +146,9 @@ cd web; npm run build
 go run ./cmd/server
 ```
 
-如果没有设置 `DATABASE_URL`，服务仍会正常启动，旧同步生成和编辑接口继续可用；异步接口会返回配置错误。
+如果没有设置 `DATABASE_URL`，服务仍会正常启动，同步生成、编辑和 Responses 代理继续可用；异步接口会返回配置错误。
 
-开启 `DATABASE_URL` 后，页面里的生成和编辑会优先提交异步任务。上传的编辑原图会保存到 `data/uploads/{task_id}/`，生成结果会保存到 `data/results/{task_id}/`。
+开启 `DATABASE_URL` 后，服务端异步任务接口可用。上传的编辑原图会保存到 `data/uploads/{task_id}/`，生成结果会保存到 `data/results/{task_id}/`。
 
 磁盘保留策略：
 
@@ -182,8 +184,7 @@ Cache API 缓存 /files/* 图片响应
 本地数据设置：
 
 ```text
-渠道页危险区提供“清理本地设置”和“重置浏览器数据”
-这些操作只影响当前浏览器，不会批量删除服务端任务、渠道或图片
+设置页的数据管理操作只影响当前浏览器，不会批量删除服务端任务、渠道或图片
 ```
 
 安全策略：
@@ -224,23 +225,11 @@ internal/tasks/      任务仓库与 worker
 internal/storage/    本地文件存储
 migrations/          数据库迁移
 web/                 React/Vite 前端工程
-web/src/             React 应用外壳、服务端图库、任务列表
-web/public/legacy.html 当前保留的创建/编辑入口
+web/src/             完整 React 前端应用
+web/public/          PWA manifest、图标和 service worker
 web/dist/            前端构建产物，由 Go embed 打包
 ```
 
-创建页渠道选择：
+## 许可说明
 
-```text
-渠道页保存的配置会出现在创建页“渠道”下拉框
-选择已保存渠道后，Base URL 和 API Key 输入框会隐藏
-提交生成/编辑时会发送 __provider_profile_id
-选择“临时自定义”时恢复手填 Base URL / API Key
-```
-
-创建页结果展示：
-
-```text
-创建页右侧只展示本次生成/编辑返回的图片
-历史图片和服务端资产统一在 React“图库”页查看和管理
-```
+第三方前端代码来源与许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
