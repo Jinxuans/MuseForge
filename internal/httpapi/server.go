@@ -150,10 +150,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleProviderProfileByID(lrw, r)
 	case strings.HasPrefix(r.URL.Path, "/files/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		s.handleFile(lrw, r)
-	case r.URL.Path == "/images/generations" && r.Method == http.MethodPost:
+	case (r.URL.Path == "/images/generations" || r.URL.Path == "/v1/images/generations") && r.Method == http.MethodPost:
 		s.handleImageGenerations(lrw, r)
-	case r.URL.Path == "/images/edits" && r.Method == http.MethodPost:
+	case (r.URL.Path == "/images/edits" || r.URL.Path == "/v1/images/edits") && r.Method == http.MethodPost:
 		s.handleImageEdits(lrw, r)
+	case r.URL.Path == "/v1/responses" && r.Method == http.MethodPost:
+		s.handleResponses(lrw, r)
 	case r.Method == http.MethodGet || r.Method == http.MethodHead:
 		s.serveStatic(lrw, r)
 	default:
@@ -712,6 +714,41 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.proxyRequest(w, r.Context().Done(), upstreamBaseURL+"/images/edits", authorizationHeader, contentType, body)
+}
+
+func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
+	var payload map[string]any
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&payload); err != nil || payload == nil {
+		jsonResponse(w, http.StatusBadRequest, errorPayload("Request body must be JSON."))
+		return
+	}
+
+	options := extractRelayOptionsFromJSON(payload)
+	options.ClientHash = clientHashFromRequest(r)
+	if err := s.applyProviderProfile(r.Context(), &options); err != nil {
+		jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
+		return
+	}
+	authorizationHeader := s.getAuthorizationHeader(r, options.APIKey)
+	if authorizationHeader == "" {
+		jsonResponse(w, http.StatusBadRequest, missingAPIKeyPayload())
+		return
+	}
+
+	upstreamBaseURL, err := s.resolveUpstreamBaseURL(options.UpstreamBaseURL)
+	if err != nil {
+		jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
+		return
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		jsonResponse(w, http.StatusBadRequest, errorPayload("Request body must be JSON."))
+		return
+	}
+
+	s.proxyRequest(w, r.Context().Done(), upstreamBaseURL+"/responses", authorizationHeader, "application/json", bytes.NewReader(body))
 }
 
 func extractRelayOptionsFromJSON(payload map[string]any) relayOptions {
