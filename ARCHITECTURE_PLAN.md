@@ -126,19 +126,19 @@ POST   /v1/images/edits
 POST   /images/edits
 POST   /v1/responses
 
-POST   /api/tasks/generations
-POST   /api/tasks/edits
-GET    /api/tasks
-GET    /api/tasks/{id}
-POST   /api/tasks/{id}/cancel
+POST   /api/v1/tasks/generations
+POST   /api/v1/tasks/edits
+GET    /api/v1/tasks
+GET    /api/v1/tasks/{id}
+POST   /api/v1/tasks/{id}/cancel
 
-GET    /api/assets
-DELETE /api/assets/{id}
+GET    /api/v1/assets
+DELETE /api/v1/assets/{id}
 GET    /files/{asset_id}
 
-GET    /api/provider-profiles
-POST   /api/provider-profiles
-DELETE /api/provider-profiles/{id}
+GET    /api/v1/provider-profiles
+POST   /api/v1/provider-profiles
+DELETE /api/v1/provider-profiles/{id}
 
 GET    /health
 ```

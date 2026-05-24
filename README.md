@@ -11,14 +11,14 @@ MuseForge 是一个开源 AI 创作平台，当前以图片生成和编辑为核
 - 图片生成：`POST /v1/images/generations` 或 `POST /images/generations`
 - 图片编辑：`POST /v1/images/edits` 或 `POST /images/edits`
 - Responses API：`POST /v1/responses`
-- 异步生成：`POST /api/tasks/generations`
-- 异步编辑：`POST /api/tasks/edits`
-- 任务列表：`GET /api/tasks`
-- 服务端资产：`GET /api/assets`
-- 删除资产：`DELETE /api/assets/{id}`
-- 渠道列表：`GET /api/provider-profiles`
-- 保存渠道：`POST /api/provider-profiles`
-- 删除渠道：`DELETE /api/provider-profiles/{id}`
+- 异步生成：`POST /api/v1/tasks/generations`
+- 异步编辑：`POST /api/v1/tasks/edits`
+- 任务列表：`GET /api/v1/tasks`
+- 服务端资产：`GET /api/v1/assets`
+- 删除资产：`DELETE /api/v1/assets/{id}`
+- 渠道列表：`GET /api/v1/provider-profiles`
+- 保存渠道：`POST /api/v1/provider-profiles`
+- 删除渠道：`DELETE /api/v1/provider-profiles/{id}`
 
 浏览器首次打开时会在本地生成一个匿名客户端 ID，前端请求会自动携带 `X-Client-ID`。服务端按该 ID 隔离已保存渠道、任务列表和图库资产；不同浏览器不会看到彼此保存的渠道和生成记录。这个机制用于匿名隔离，不等同于登录鉴权。
 
@@ -174,7 +174,7 @@ go run ./cmd/server
 
 ```text
 服务端 assets 是权威数据
-IndexedDB 缓存 /api/assets 返回的元数据
+IndexedDB 缓存 /api/v1/assets 返回的元数据
 Cache API 缓存 /files/* 图片响应
 页面打开时优先渲染本地缓存，再后台刷新服务端资产列表
 删除服务端资产时同步清理 IndexedDB 元数据缓存和 Cache API 图片缓存
@@ -231,6 +231,33 @@ LOG_FORMAT 支持 text/json，生产环境建议 json
 ```powershell
 npm run build --prefix web
 go build -buildvcs=false -o museforge.exe ./cmd/server
+```
+
+## 自托管验证
+
+发布前建议至少跑一遍：
+
+```powershell
+go test ./...
+npm run test --prefix web
+npm run build --prefix web
+go build -buildvcs=false -o tmp\museforge-check.exe .\cmd\server
+```
+
+如果本机可用 Docker，可以额外启动一次临时 PostgreSQL，验证数据库迁移幂等性和匿名客户端隔离：
+
+```powershell
+.\scripts\verify-postgres.ps1
+```
+
+最小 smoke test：
+
+```powershell
+$env:DATABASE_URL='postgres://user:password@127.0.0.1:5432/museforge?sslmode=disable'
+$env:DATA_DIR='./data'
+.\museforge.exe
+Invoke-RestMethod http://127.0.0.1:5000/health
+Invoke-RestMethod http://127.0.0.1:5000/api/v1/health-capabilities
 ```
 
 ## 目录结构
