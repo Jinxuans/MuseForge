@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { initStore } from './store'
 import { useStore } from './store'
 import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
@@ -6,26 +6,45 @@ import { useDockerApiUrlMigrationNotice } from './hooks/useDockerApiUrlMigration
 import Header from './components/Header'
 import SearchBar from './components/SearchBar'
 import TaskGrid from './components/TaskGrid'
-import AgentWorkspace from './components/AgentWorkspace'
-import SquarePage from './components/SquarePage'
-import ShareToSquareModal from './components/ShareToSquareModal'
 import InputBar from './components/InputBar'
-import DetailModal from './components/DetailModal'
-import Lightbox from './components/Lightbox'
-import SettingsModal from './components/SettingsModal'
 import ConfirmDialog from './components/ConfirmDialog'
 import Toast from './components/Toast'
-import MaskEditorModal from './components/MaskEditorModal'
 import ImageContextMenu from './components/ImageContextMenu'
 import TaskContextMenu from './components/TaskContextMenu'
-import SupportPromptModal from './components/SupportPromptModal'
-import PromptLibraryDrawer from './components/PromptLibraryDrawer'
-import MoveCategoryModal from './components/MoveCategoryModal'
 import { useGlobalClickSuppression } from './lib/clickSuppression'
+
+const AgentWorkspace = lazy(() => import('./components/AgentWorkspace'))
+const SquarePage = lazy(() => import('./components/SquarePage'))
+const DetailModal = lazy(() => import('./components/DetailModal'))
+const Lightbox = lazy(() => import('./components/Lightbox'))
+const SettingsModal = lazy(() => import('./components/SettingsModal'))
+const MaskEditorModal = lazy(() => import('./components/MaskEditorModal'))
+const ShareToSquareModal = lazy(() => import('./components/ShareToSquareModal'))
+const SupportPromptModal = lazy(() => import('./components/SupportPromptModal'))
+const PromptLibraryDrawer = lazy(() => import('./components/PromptLibraryDrawer'))
+const MoveCategoryModal = lazy(() => import('./components/MoveCategoryModal'))
+
+function AppModeFallback() {
+  return (
+    <main className="pb-48">
+      <div className="safe-area-x mx-auto max-w-7xl pt-8 text-sm text-gray-400 dark:text-gray-500">
+        加载中...
+      </div>
+    </main>
+  )
+}
 
 export default function App() {
   const setSettings = useStore((s) => s.setSettings)
   const appMode = useStore((s) => s.appMode)
+  const detailTaskId = useStore((s) => s.detailTaskId)
+  const lightboxImageId = useStore((s) => s.lightboxImageId)
+  const showSettings = useStore((s) => s.showSettings)
+  const supportPromptOpen = useStore((s) => s.supportPromptOpen)
+  const shareToSquareTarget = useStore((s) => s.shareToSquareTarget)
+  const showPromptLibrary = useStore((s) => s.showPromptLibrary)
+  const moveCategoryTaskIds = useStore((s) => s.moveCategoryTaskIds)
+  const maskEditorImageId = useStore((s) => s.maskEditorImageId)
   useDockerApiUrlMigrationNotice()
   useGlobalClickSuppression()
 
@@ -60,29 +79,33 @@ export default function App() {
   return (
     <>
       <Header />
-      {appMode === 'agent' ? (
-        <AgentWorkspace />
-      ) : appMode === 'square' ? (
-        <SquarePage />
-      ) : (
-        <main data-home-main data-drag-select-surface className="pb-48">
-          <div className="safe-area-x max-w-7xl mx-auto">
-            <SearchBar />
-            <TaskGrid />
-          </div>
-        </main>
-      )}
+      <Suspense fallback={<AppModeFallback />}>
+        {appMode === 'agent' ? (
+          <AgentWorkspace />
+        ) : appMode === 'square' ? (
+          <SquarePage />
+        ) : (
+          <main data-home-main data-drag-select-surface className="pb-48">
+            <div className="safe-area-x max-w-7xl mx-auto">
+              <SearchBar />
+              <TaskGrid />
+            </div>
+          </main>
+        )}
+      </Suspense>
       {appMode !== 'square' && <InputBar />}
-      <DetailModal />
-      <Lightbox />
-      <SettingsModal />
+      <Suspense fallback={null}>
+        {detailTaskId && <DetailModal />}
+        {lightboxImageId && <Lightbox />}
+        {showSettings && <SettingsModal />}
+        {supportPromptOpen && <SupportPromptModal />}
+        {shareToSquareTarget && <ShareToSquareModal />}
+        {showPromptLibrary && <PromptLibraryDrawer />}
+        {moveCategoryTaskIds?.length ? <MoveCategoryModal /> : null}
+        {maskEditorImageId && <MaskEditorModal />}
+      </Suspense>
       <ConfirmDialog />
-      <SupportPromptModal />
-      <ShareToSquareModal />
-      <PromptLibraryDrawer />
-      <MoveCategoryModal />
       <Toast />
-      <MaskEditorModal />
       <ImageContextMenu />
       <TaskContextMenu />
     </>

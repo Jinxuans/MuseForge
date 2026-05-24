@@ -44,6 +44,25 @@ export default defineConfig(({ command, mode }) => {
       __APP_VERSION__: JSON.stringify(pkg.version),
       __DEV_PROXY_CONFIG__: JSON.stringify(devProxyConfig),
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined
+            if (id.includes('streamdown') || id.includes('react-markdown') || id.includes('remark-gfm')) {
+              return 'markdown'
+            }
+            if (id.includes('mermaid')) return 'mermaid'
+            if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/scheduler/')) {
+              return 'react-vendor'
+            }
+            if (id.includes('/core-js/')) return 'polyfills'
+            if (id.includes('/@fal-ai/')) return 'fal-vendor'
+            return 'vendor'
+          },
+        },
+      },
+    },
     server: {
       host: '127.0.0.1',
       port: 5171,
