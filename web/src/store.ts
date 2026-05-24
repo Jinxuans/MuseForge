@@ -19,6 +19,7 @@ import type {
   ResponsesApiResponse,
   ResponsesOutputItem,
   SquareShareTarget,
+  StoredServerAsset,
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
@@ -38,19 +39,27 @@ import {
   getStoredFreshImageThumbnail,
   getAllImageIds,
   getAllImages,
+  getAllServerAssets,
   putImage,
   putImageThumbnail,
+  putServerAsset,
+  deleteServerAsset,
+  clearServerAssets,
   deleteImage,
   clearImages,
   storeImage,
 } from './lib/db'
 import { callImageApi } from './lib/api'
 import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage, type BatchImageCallResult } from './lib/agentApi'
+import { getBackendCapabilities } from './lib/backendCapabilities'
+import { BackendApiError } from './lib/backendClient'
+import { backendTaskToTaskRecord, cancelBackendTask, createBackendEditTask, createBackendGenerationTask, getBackendTask, getTaskOutputAssets, listBackendTasksPage, mapServerTaskStatus, serverTaskParams, type CreativeTaskDTO } from './lib/backendTasks'
+import { backendAssetToStoredServerAsset, clearCachedServerAssets, deleteCachedServerAsset, fetchBackendAssetAsDataUrl, getAssetPublicUrl, listBackendAssetsPage, type ListAssetsInput } from './lib/backendAssets'
 import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId, replaceAgentPromptImageReferencesForApi } from './lib/agentImageReferences'
 import { IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
-import { validateMaskMatchesImage } from './lib/canvasImage'
+import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob, validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
@@ -76,10 +85,12 @@ const falRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const agentRoundControllers = new Map<string, AbortController>()
+let backendCapabilitiesPromise: Promise<Awaited<ReturnType<typeof getBackendCapabilities>> | null> | null = null
 let agentConversationPersistenceReady = false
 let agentConversationMigrationPending = false
 const OPENAI_INTERRUPTED_ERROR = '请求中断'
 const AGENT_STOPPED_MESSAGE = '已停止生成。'
+const SERVER_TASK_CANCELED_MESSAGE = '任务已取消。'
 const AGENT_CONVERSATION_TITLE_MAX_LENGTH = 28
 const ERROR_TOAST_MAX_LENGTH = 80
 const UNCATEGORIZED_CATEGORY_ID = '__uncategorized__'
@@ -1902,21 +1913,24 @@ function getApiRequestNetworkErrorHint(
   return `提示：请求等待较长时间后被断开，通常是反向代理或网关的超时限制，而非接口本身报错。可检查代理超时设置，或降低图片尺寸/质量后重试。${getTimeoutStreamingHint(profile)}`
 }
 
-function getRawErrorPayload(err: unknown): Pick<Partial<TaskRecord>, 'rawImageUrls' | 'rawResponsePayload'> {
+function getRawErrorPayload(err: unknown): Pick<Partial<TaskRecord>, 'rawImageUrls' | 'rawResponsePayload' | 'lastRequestId'> {
   if (!(err instanceof Error)) return {}
 
   const rawImageUrls = 'rawImageUrls' in err ? (err as { rawImageUrls?: unknown }).rawImageUrls : undefined
   const rawResponsePayload = 'rawResponsePayload' in err ? (err as { rawResponsePayload?: unknown }).rawResponsePayload : undefined
+  const requestId = err instanceof BackendApiError ? err.requestId : 'requestId' in err ? (err as { requestId?: unknown }).requestId : undefined
   return {
     rawImageUrls: Array.isArray(rawImageUrls) && rawImageUrls.length ? rawImageUrls.filter((url): url is string => typeof url === 'string') : undefined,
     rawResponsePayload: typeof rawResponsePayload === 'string' ? rawResponsePayload : undefined,
+    lastRequestId: typeof requestId === 'string' && requestId.trim() ? requestId : undefined,
   }
 }
 
-function createTaskErrorDebug(task: TaskRecord, message: string, rawPayload: Pick<Partial<TaskRecord>, 'rawImageUrls' | 'rawResponsePayload'> = {}) {
+function createTaskErrorDebug(task: TaskRecord, message: string, rawPayload: Pick<Partial<TaskRecord>, 'rawImageUrls' | 'rawResponsePayload' | 'lastRequestId'> = {}) {
   return {
     createdAt: Date.now(),
     message,
+    requestId: rawPayload.lastRequestId,
     apiProvider: task.apiProvider,
     apiProfileName: task.apiProfileName,
     apiMode: task.apiMode,
@@ -2123,6 +2137,8 @@ export async function initStore() {
     .filter((task, index) => interruptedTaskIds.has(task.id) || task.rawResponsePayload !== markedTasks[index]?.rawResponsePayload)
     .map((task) => putTask(task)))
   useStore.getState().setTasks(tasks)
+  void syncBackendTasksToStore()
+  void syncBackendAssetsToLocalCache()
   void cleanupExpiredTrashTasks()
   showSupportPromptForExistingLocalData(tasks)
   for (const task of tasks) {
@@ -2282,6 +2298,137 @@ function resolveTaskParentFromInputImages(inputImages: InputImage[]) {
     parentTaskId: source?.sourceTaskId ?? null,
     parentImageId: source?.sourceImageId ?? null,
   }
+}
+
+async function syncBackendTasksToStore() {
+  const capabilities = await getBackendCapabilitiesCached()
+  if (!capabilities?.asyncTasks) return
+
+  const settings = useStore.getState().settings
+  const profile = getActiveApiProfile(settings)
+  let serverTasks: CreativeTaskDTO[] = []
+  try {
+    let cursor: string | null = null
+    do {
+      const page = await listBackendTasksPage({ limit: 50, cursor: cursor ?? undefined })
+      serverTasks.push(...page.items)
+      cursor = page.nextCursor
+    } while (cursor)
+  } catch {
+    return
+  }
+  if (!serverTasks.length) return
+
+  const existing = useStore.getState().tasks
+  const existingByServerId = new Map(existing.map((task) => [task.serverTaskId ?? task.id, task]))
+  const nextById = new Map(existing.map((task) => [task.id, task]))
+
+  for (const serverTask of serverTasks) {
+    const current = existingByServerId.get(serverTask.id)
+    const outputImageIds = await cacheServerTaskOutputImages(serverTask, current?.outputImages ?? [])
+    const mapped = backendTaskToTaskRecord(serverTask, { outputImageIds, profile })
+    const merged: TaskRecord = current
+      ? {
+          ...current,
+          ...mapped,
+          id: current.id,
+          categoryId: current.categoryId,
+          categoryName: current.categoryName,
+          deletedAt: current.deletedAt,
+          parentTaskId: current.parentTaskId,
+          parentImageId: current.parentImageId,
+          inputImageIds: current.inputImageIds,
+          maskTargetImageId: current.maskTargetImageId,
+          maskImageId: current.maskImageId,
+          outputImages: outputImageIds.length ? outputImageIds : current.outputImages,
+        }
+      : mapped
+    nextById.set(merged.id, merged)
+  }
+
+  const mergedTasks = Array.from(nextById.values()).sort((a, b) => b.createdAt - a.createdAt)
+  useStore.getState().setTasks(mergedTasks)
+  await Promise.all(mergedTasks.map((task) => putTask(task)))
+}
+
+async function cacheServerTaskOutputImages(serverTask: CreativeTaskDTO, fallbackIds: string[]) {
+  if (mapServerTaskStatus(serverTask.status) !== 'done') return fallbackIds
+  const outputIds: string[] = []
+  for (const asset of getTaskOutputAssets(serverTask)) {
+    const url = getAssetPublicUrl(asset)
+    if (!url) continue
+    try {
+      const dataUrl = await fetchBackendAssetAsDataUrl(asset)
+      const imageId = await storeImage(dataUrl, 'generated')
+      cacheImage(imageId, dataUrl)
+      outputIds.push(imageId)
+    } catch {
+      // Keep server sync best-effort; task metadata still updates if image caching fails.
+    }
+  }
+  return outputIds.length ? outputIds : fallbackIds
+}
+
+async function syncBackendAssetsToLocalCache(input: ListAssetsInput = { limit: 100 }) {
+  const capabilities = await getBackendCapabilitiesCached()
+  if (!capabilities?.assets) {
+    await refreshServerAssetMetadataOnly()
+    return
+  }
+
+  let assets: Awaited<ReturnType<typeof listBackendAssetsPage>>['items'] = []
+  try {
+    let cursor: string | null = input.cursor ?? null
+    do {
+      const page = await listBackendAssetsPage({ ...input, cursor: cursor ?? undefined })
+      assets.push(...page.items)
+      cursor = page.nextCursor
+    } while (cursor)
+  } catch {
+    await refreshServerAssetMetadataOnly()
+    return
+  }
+
+  const existingAssets = await getAllServerAssets()
+  const existingAssetsById = new Map(existingAssets.map((asset) => [asset.id, asset]))
+  const remainingIds = new Set(existingAssets.map((asset) => asset.id))
+  const cachedIds: string[] = []
+  for (const asset of assets) {
+    remainingIds.delete(asset.id)
+    const publicUrl = getAssetPublicUrl(asset)
+    if (!publicUrl) {
+      await putServerAsset(backendAssetToStoredServerAsset(asset, null))
+      continue
+    }
+    try {
+      const dataUrl = await fetchBackendAssetAsDataUrl(asset)
+      const imageId = await storeImage(dataUrl, 'generated')
+      cacheImage(imageId, dataUrl)
+      cachedIds.push(imageId)
+      await putServerAsset(backendAssetToStoredServerAsset(asset, imageId))
+    } catch {
+      // Asset cache warmup is best-effort; task sync remains the source of visible records.
+      await putServerAsset(backendAssetToStoredServerAsset(asset, null))
+    }
+  }
+  const canPruneMissingAssets = !input.cursor && !input.kind && !input.projectId && !input.taskId
+  if (canPruneMissingAssets) {
+    for (const assetId of remainingIds) {
+      const existing = existingAssetsById.get(assetId)
+      if (!existing) continue
+      await deleteServerAsset(assetId)
+      if (existing.publicUrl) await deleteCachedServerAsset(existing.publicUrl)
+      if (existing.localImageId) await deleteUnreferencedImageIds([existing.localImageId])
+    }
+  }
+  if (cachedIds.length) scheduleThumbnailBackfill(cachedIds)
+}
+
+async function refreshServerAssetMetadataOnly() {
+  const assets = await getAllServerAssets()
+  if (!assets.length) return
+  const localImageIds = assets.map((asset) => asset.localImageId).filter((id): id is string => Boolean(id))
+  if (localImageIds.length) scheduleThumbnailBackfill(localImageIds)
 }
 
 export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {}) {
@@ -3986,6 +4133,131 @@ async function executeAgentRound(
   }
 }
 
+async function getBackendCapabilitiesCached() {
+  if (!backendCapabilitiesPromise) {
+    backendCapabilitiesPromise = getBackendCapabilities().catch(() => null)
+  }
+  return backendCapabilitiesPromise
+}
+
+function shouldUseBackendTaskExecution(profile: ApiProfile, task: TaskRecord, capabilities: Awaited<ReturnType<typeof getBackendCapabilities>> | null) {
+  if (!capabilities?.asyncTasks) return false
+  if (task.apiProvider !== 'openai') return false
+  if (profile.apiMode !== 'images') return false
+  return true
+}
+
+function getServerTaskErrorMessage(serverTask: CreativeTaskDTO) {
+  if (serverTask.status === 'canceled') return SERVER_TASK_CANCELED_MESSAGE
+  return serverTask.error ?? serverTask.lastError ?? serverTask.last_error ?? null
+}
+
+function getTaskExecutionErrorMessage(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err)
+  if (/provider profile not found/i.test(message)) {
+    return '服务端渠道配置不存在或已删除，请在设置中重新保存 API 配置。'
+  }
+  return message
+}
+
+function getServerTaskStatusPatch(serverTask: CreativeTaskDTO): Partial<TaskRecord> {
+  const serverStatus = mapServerTaskStatus(serverTask.status)
+  return {
+    serverTaskId: serverTask.id,
+    serverTaskStatus: serverTask.status,
+    status: serverStatus,
+    error: serverStatus === 'done' ? null : getServerTaskErrorMessage(serverTask),
+    lastError: serverTask.lastError ?? serverTask.last_error ?? null,
+    attemptCount: serverTask.attemptCount ?? serverTask.attempt_count ?? undefined,
+    maxAttempts: serverTask.maxAttempts ?? serverTask.max_attempts ?? undefined,
+  }
+}
+
+async function saveBackendTaskOutputs(taskId: string, task: TaskRecord, serverTask: Awaited<ReturnType<typeof getBackendTask>>) {
+  const outputAssets = getTaskOutputAssets(serverTask)
+  const outputIds: string[] = []
+  for (const asset of outputAssets) {
+    const url = getAssetPublicUrl(asset)
+    if (!url) continue
+    const dataUrl = await fetchBackendAssetAsDataUrl(asset)
+    const imageId = await storeImage(dataUrl, 'generated')
+    cacheImage(imageId, dataUrl)
+    outputIds.push(imageId)
+  }
+  const actualParams = serverTaskParams(serverTask)
+  const serverStatus = mapServerTaskStatus(serverTask.status)
+  updateTaskInStore(taskId, {
+    serverTaskId: serverTask.id,
+    serverTaskStatus: serverTask.status,
+    outputImages: outputIds,
+    status: serverStatus,
+    error: serverStatus === 'done' ? null : getServerTaskErrorMessage(serverTask),
+    lastError: serverTask.lastError ?? serverTask.last_error ?? null,
+    actualParams,
+    actualParamsByImage: outputIds.reduce<Record<string, Partial<TaskParams>>>((acc, imgId) => {
+      acc[imgId] = actualParams
+      return acc
+    }, {}),
+    finishedAt: serverStatus === 'done' ? Date.now() : task.finishedAt ?? null,
+    elapsed: serverStatus === 'done' ? Date.now() - task.createdAt : task.elapsed,
+    streamPartialImageIds: undefined,
+  })
+  return { outputIds }
+}
+
+async function executeBackendTask(taskId: string, task: TaskRecord, profile: ApiProfile) {
+  const inputDataUrls: string[] = []
+  for (const imgId of task.inputImageIds) {
+    const dataUrl = await ensureImageCached(imgId)
+    if (!dataUrl) throw new Error('输入图片已不存在')
+    inputDataUrls.push(dataUrl)
+  }
+
+  let maskBlob: Blob | null = null
+  if (task.maskImageId) {
+    const maskDataUrl = await ensureImageCached(task.maskImageId)
+    if (!maskDataUrl) throw new Error('遮罩图片已不存在')
+    maskBlob = await maskDataUrlToPngBlob(maskDataUrl)
+  }
+
+  const generationInput = {
+    model: task.apiModel || profile.model,
+    prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
+    params: task.params,
+    upstreamBaseUrl: profile.serverProfileId ? undefined : profile.baseUrl,
+    apiKey: profile.serverProfileId ? undefined : profile.apiKey,
+    providerProfileId: profile.serverProfileId ?? null,
+  }
+
+  const serverTask = inputDataUrls.length > 0 || maskBlob
+    ? await createBackendEditTask({
+        ...generationInput,
+        images: await Promise.all(inputDataUrls.map((dataUrl, index) => index === 0 && maskBlob ? imageDataUrlToPngBlob(dataUrl) : dataUrlToBlob(dataUrl))),
+        mask: maskBlob,
+      })
+    : await createBackendGenerationTask(generationInput)
+
+  updateTaskInStore(taskId, {
+    ...getServerTaskStatusPatch(serverTask),
+  })
+
+  let latest = serverTask
+  while (mapServerTaskStatus(latest.status) === 'running') {
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    latest = await getBackendTask(serverTask.id)
+    updateTaskInStore(taskId, {
+      ...getServerTaskStatusPatch(latest),
+    })
+  }
+
+  if (mapServerTaskStatus(latest.status) !== 'done') {
+    throw new Error(getServerTaskErrorMessage(latest) ?? '后端任务失败')
+  }
+
+  const { outputIds } = await saveBackendTaskOutputs(taskId, task, latest)
+  useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
+}
+
 async function executeTask(taskId: string) {
   const { settings } = useStore.getState()
   const task = useStore.getState().tasks.find((t) => t.id === taskId)
@@ -4017,6 +4289,12 @@ async function executeTask(taskId: string) {
   }
 
   try {
+    const backendCapabilities = await getBackendCapabilitiesCached()
+    if (shouldUseBackendTaskExecution(activeProfile, task, backendCapabilities)) {
+      await executeBackendTask(taskId, task, activeProfile)
+      return
+    }
+
     // 获取输入图片 data URLs
     const inputDataUrls: string[] = []
     for (const imgId of task.inputImageIds) {
@@ -4165,7 +4443,7 @@ async function executeTask(taskId: string) {
       })
       scheduleCustomRecovery(taskId)
     } else {
-      let errorMessage = err instanceof Error ? err.message : String(err)
+      let errorMessage = getTaskExecutionErrorMessage(err)
       const settings = useStore.getState().settings
       const profile = getTaskApiProfile(settings, latestTask)
       const usesApiProxy = profile?.apiProxy ?? settings.apiProxy
@@ -4210,6 +4488,56 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   maybeOpenSupportPrompt(tasks, updated, taskId)
   const task = updated.find((t) => t.id === taskId)
   if (task) putTask(task)
+}
+
+export function canCancelQueuedServerTask(task: TaskRecord) {
+  return Boolean(task.serverTaskId && task.status === 'running' && task.serverTaskStatus === 'queued')
+}
+
+export async function cancelQueuedServerTask(task: TaskRecord) {
+  const current = useStore.getState().tasks.find((item) => item.id === task.id) ?? task
+  if (!current.serverTaskId) {
+    useStore.getState().showToast('这条任务没有服务端任务 ID，无法取消', 'error')
+    return false
+  }
+  if (!canCancelQueuedServerTask(current)) {
+    useStore.getState().showToast('任务已开始执行或已结束，无法取消排队', 'info')
+    return false
+  }
+
+  try {
+    const result = await cancelBackendTask(current.serverTaskId)
+    if (!result.canceled) {
+      try {
+        const latest = await getBackendTask(current.serverTaskId)
+        updateTaskInStore(current.id, getServerTaskStatusPatch(latest))
+      } catch {
+        // 状态刷新失败不影响取消结果提示。
+      }
+      useStore.getState().showToast('任务已开始执行，无法取消排队', 'info')
+      return false
+    }
+
+    const now = Date.now()
+    updateTaskInStore(current.id, {
+      serverTaskStatus: 'canceled',
+      status: 'error',
+      error: SERVER_TASK_CANCELED_MESSAGE,
+      lastError: null,
+      falRecoverable: false,
+      customRecoverable: false,
+      streamPartialImageIds: undefined,
+      finishedAt: now,
+      elapsed: now - current.createdAt,
+    })
+    useStore.getState().setTaskStreamPreview(current.id)
+    useStore.getState().showToast('已取消排队任务', 'success')
+    return true
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    useStore.getState().showToast(`取消任务失败：${message}`, 'error')
+    return false
+  }
 }
 
 export function moveTasksToCategory(taskIds: string[], categoryId: string | null) {
@@ -4459,6 +4787,8 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
     await dbClearTasks()
     await dbClearAgentConversations()
     await clearImages()
+    await clearServerAssets()
+    await clearCachedServerAssets()
     imageCache.clear()
     thumbnailCache.clear()
     thumbnailBackfillIds.clear()
@@ -4576,13 +4906,52 @@ export interface ExportOptions {
   exportTasks?: boolean
 }
 
+function buildExportServerAssets(tasks: TaskRecord[], serverAssets: StoredServerAsset[], exportedAt: number) {
+  const byId = new Map(serverAssets.map((asset) => [asset.id, asset]))
+  for (const task of tasks) {
+    const assetIds = task.serverOutputAssetIds ?? []
+    for (let index = 0; index < assetIds.length; index++) {
+      const assetId = assetIds[index]
+      if (!assetId || byId.has(assetId)) continue
+      byId.set(assetId, {
+        id: assetId,
+        taskId: task.serverTaskId ?? task.id,
+        taskType: task.apiMode ?? null,
+        prompt: task.prompt,
+        storageKey: null,
+        publicUrl: task.rawImageUrls?.[index] ?? '',
+        mime: 'image/png',
+        width: null,
+        height: null,
+        sizeBytes: null,
+        sha256: null,
+        kind: 'output',
+        visibility: 'private',
+        localImageId: task.outputImages?.[index] ?? null,
+        createdAt: task.createdAt,
+        syncedAt: exportedAt,
+      })
+    }
+  }
+  return Array.from(byId.values())
+}
+
+function sanitizeSettingsForExport(settings: AppSettings): AppSettings {
+  return normalizeSettings({
+    ...settings,
+    apiKey: '',
+    profiles: settings.profiles.map((profile) => ({ ...profile, apiKey: '' })),
+  })
+}
+
 /** 导出数据为 ZIP */
 export async function exportData(options: ExportOptions = { exportConfig: true, exportTasks: true }) {
   try {
     const tasks = options.exportTasks ? await getAllTasks() : []
     const images = options.exportTasks ? await getAllImages() : []
-    const { settings, agentConversations, categories, promptLibrary } = useStore.getState()
     const exportedAt = Date.now()
+    const serverAssets = options.exportTasks ? buildExportServerAssets(tasks, await getAllServerAssets(), exportedAt) : []
+    const { settings, agentConversations, categories, promptLibrary } = useStore.getState()
     const imageCreatedAtFallback = new Map<string, number>()
 
     if (options.exportTasks) {
@@ -4643,11 +5012,11 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     }
 
     const manifest: ExportData = {
-      version: 3,
+      version: 4,
       exportedAt: new Date(exportedAt).toISOString(),
     }
 
-    if (options.exportConfig) manifest.settings = settings
+    if (options.exportConfig) manifest.settings = sanitizeSettingsForExport(settings)
     if (options.exportConfig || options.exportTasks) {
       manifest.categories = categories
       manifest.promptLibrary = promptLibrary
@@ -4657,6 +5026,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
       manifest.agentConversations = getPersistableAgentConversations(agentConversations)
       manifest.imageFiles = imageFiles
       manifest.thumbnailFiles = thumbnailFiles
+      manifest.serverAssets = serverAssets
     }
 
     zipFiles['manifest.json'] = [strToU8(JSON.stringify(manifest, null, 2)), { mtime: new Date(exportedAt) }]
@@ -4732,6 +5102,15 @@ export async function importData(file: File, options: ImportOptions = { importCo
           width: info.width,
           height: info.height,
           thumbnailVersion: info.thumbnailVersion,
+        })
+      }
+
+      const importedImageIdSet = new Set(importedImageIds)
+      for (const asset of data.serverAssets ?? []) {
+        await putServerAsset({
+          ...asset,
+          localImageId: asset.localImageId && importedImageIdSet.has(asset.localImageId) ? asset.localImageId : null,
+          syncedAt: Date.now(),
         })
       }
 

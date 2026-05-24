@@ -70,6 +70,8 @@ export interface ApiProfile {
   responseFormatB64Json?: boolean
   streamImages?: boolean
   streamPartialImages?: number
+  /** 后端保存的渠道配置 ID；存在时服务端任务可只引用该配置，不携带明文 API Key */
+  serverProfileId?: string
   providerDrafts?: Partial<Record<ApiProvider, Partial<Pick<ApiProfile, 'baseUrl' | 'model' | 'apiMode' | 'codexCli' | 'apiProxy' | 'responseFormatB64Json' | 'streamImages' | 'streamPartialImages'>>>>
 }
 
@@ -227,6 +229,7 @@ export type SquareShareTarget = SquarePromptShareTarget | SquareTaskShareTarget
 export interface TaskErrorDebugInfo {
   createdAt: number
   message: string
+  requestId?: string
   apiProvider?: ApiProvider
   apiProfileName?: string
   apiMode?: ApiMode
@@ -272,6 +275,17 @@ export interface TaskRecord {
   customRecoverable?: boolean
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */
   actualParams?: Partial<TaskParams>
+  /** 服务端异步任务 ID；为空表示纯本地/同步任务 */
+  serverTaskId?: string
+  /** 服务端异步任务状态快照，用于区分 queued/running/canceled 等后端状态 */
+  serverTaskStatus?: string
+  /** 服务端输出资产 ID 列表 */
+  serverOutputAssetIds?: string[]
+  /** 服务端任务重试信息 */
+  attemptCount?: number
+  maxAttempts?: number
+  lastError?: string | null
+  lastRequestId?: string
   /** 输出图片对应的实际生效参数，key 为 outputImages 中的图片 id */
   actualParamsByImage?: Record<string, Partial<TaskParams>>
   /** 输出图片对应的 API 改写提示词，key 为 outputImages 中的图片 id */
@@ -385,6 +399,26 @@ export interface StoredImageThumbnail {
   height?: number
   /** 缩略图生成参数版本 */
   thumbnailVersion?: number
+}
+
+export interface StoredServerAsset {
+  id: string
+  taskId?: string | null
+  projectId?: string | null
+  taskType?: string | null
+  prompt?: string | null
+  storageKey?: string | null
+  publicUrl: string
+  mime: string
+  width?: number | null
+  height?: number | null
+  sizeBytes?: number | null
+  sha256?: string | null
+  kind?: string | null
+  visibility?: string | null
+  localImageId?: string | null
+  createdAt?: number | null
+  syncedAt: number
 }
 
 // ===== API 请求体 =====
@@ -526,4 +560,6 @@ export interface ExportData {
     height?: number
     thumbnailVersion?: number
   }>
+  /** 服务端资产元数据；publicUrl 可用于恢复，localImageId 指向 ZIP 内本地兜底图片 */
+  serverAssets?: StoredServerAsset[]
 }

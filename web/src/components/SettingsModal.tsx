@@ -24,6 +24,7 @@ import {
   switchApiProfileProvider,
 } from '../lib/apiProfiles'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
+import { createBackendProviderProfile, deleteBackendProviderProfile, updateBackendProviderProfile } from '../lib/backendProviderProfiles'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type CustomProviderDefinition } from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
@@ -312,6 +313,7 @@ export default function SettingsModal() {
   const [clearTasks, setClearTasks] = useState(true)
   const [isImportingData, setIsImportingData] = useState(false)
   const [isImportingJson, setIsImportingJson] = useState(false)
+  const [serverProfileBusy, setServerProfileBusy] = useState(false)
   const [draggedProfileId, setDraggedProfileId] = useState<string | null>(null)
   const [dragOverProfileId, setDragOverProfileId] = useState<string | null>(null)
   const [dragDropPosition, setDragDropPosition] = useState<'before' | 'after' | null>(null)
@@ -603,6 +605,66 @@ export default function SettingsModal() {
   const commitActiveProfilePatch = (patch: Partial<ApiProfile>) => {
     const nextDraft = getDraftWithActiveProfilePatch(patch)
     commitSettings(nextDraft)
+  }
+
+  const getServerProviderType = (profile: ApiProfile) => {
+    if (profile.provider === 'openai' || profile.provider === 'fal') return profile.provider
+    return 'custom-http-image'
+  }
+
+  const saveActiveProfileToServer = async () => {
+    if (serverProfileBusy) return
+    setServerProfileBusy(true)
+    try {
+      const input = {
+        name: activeProfile.name,
+        type: getServerProviderType(activeProfile),
+        baseUrl: activeProfile.baseUrl,
+        apiKey: activeProfile.apiKey.trim() ? activeProfile.apiKey.trim() : undefined,
+        model: activeProfile.model,
+        apiMode: activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode,
+        providerConfig: activeCustomProvider ? { customProvider: activeCustomProvider } : {},
+      }
+      const saved = activeProfile.serverProfileId
+        ? await updateBackendProviderProfile(activeProfile.serverProfileId, input)
+        : await createBackendProviderProfile({ ...input, apiKey: activeProfile.apiKey.trim() })
+      const serverProfileId = String(saved.id)
+      const nextDraft = normalizeSettings({
+        ...draft,
+        profiles: draft.profiles.map((profile) => profile.id === activeProfile.id ? {
+          ...profile,
+          serverProfileId,
+          apiKey: '',
+        } : profile),
+      })
+      commitSettings(nextDraft)
+      showToast(activeProfile.serverProfileId ? '服务器渠道已更新' : '服务器渠道已保存', 'success')
+    } catch (err) {
+      showToast(`服务器渠道保存失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    } finally {
+      setServerProfileBusy(false)
+    }
+  }
+
+  const deleteActiveServerProfile = async () => {
+    if (!activeProfile.serverProfileId || serverProfileBusy) return
+    setServerProfileBusy(true)
+    try {
+      await deleteBackendProviderProfile(activeProfile.serverProfileId)
+      const nextDraft = normalizeSettings({
+        ...draft,
+        profiles: draft.profiles.map((profile) => profile.id === activeProfile.id ? {
+          ...profile,
+          serverProfileId: undefined,
+        } : profile),
+      })
+      commitSettings(nextDraft)
+      showToast('服务器渠道已删除', 'success')
+    } catch (err) {
+      showToast(`服务器渠道删除失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    } finally {
+      setServerProfileBusy(false)
+    }
   }
 
   const handleClose = () => {
@@ -1489,6 +1551,39 @@ export default function SettingsModal() {
                     )}
                   </div>
                 </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gray-200/70 bg-white/50 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                <div className="min-w-0">
+                  <div className="truncate text-sm text-gray-700 dark:text-gray-200">服务器渠道</div>
+                  <div className="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-500">
+                    {activeProfile.serverProfileId ? `ID ${activeProfile.serverProfileId}` : '未保存'}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {activeProfile.serverProfileId && (
+                    <button
+                      type="button"
+                      disabled={serverProfileBusy}
+                      onClick={() => setConfirmDialog({
+                        title: '删除服务器渠道',
+                        message: `确定要删除服务器渠道「${activeProfile.name}」吗？`,
+                        action: deleteActiveServerProfile,
+                      })}
+                      className="rounded-lg border border-red-200/70 px-3 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-500/30 dark:text-red-300 dark:hover:bg-red-500/10"
+                    >
+                      删除
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={serverProfileBusy}
+                    onClick={() => void saveActiveProfileToServer()}
+                    className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500 dark:hover:bg-blue-400"
+                  >
+                    {serverProfileBusy ? '保存中' : activeProfile.serverProfileId ? '更新' : '保存'}
+                  </button>
+                </div>
+              </div>
 
               {/* 1. 配置名称 */}
               <label className="block">

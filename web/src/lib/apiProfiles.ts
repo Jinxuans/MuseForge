@@ -444,6 +444,7 @@ export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfil
     responseFormatB64Json: record.responseFormatB64Json === true ? true : undefined,
     streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : defaults.streamImages,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages, defaults.streamPartialImages),
+    serverProfileId: typeof record.serverProfileId === 'string' && record.serverProfileId.trim() ? record.serverProfileId.trim() : undefined,
     providerDrafts: normalizeProviderDrafts(record.providerDrafts, customProviderIds),
   }
 }
@@ -608,7 +609,7 @@ export function getActiveApiProfile(settings: Partial<AppSettings> | unknown): A
 export function validateApiProfile(profile: ApiProfile): string | null {
   if (!profile.name.trim()) return '缺少名称'
   if (profile.provider !== 'fal' && !profile.baseUrl.trim()) return '缺少 API URL'
-  if (!profile.apiKey.trim() && !isSameOriginMuseForgeRelay(profile.baseUrl)) return '缺少 API Key'
+  if (!profile.serverProfileId && !profile.apiKey.trim() && !isSameOriginMuseForgeRelay(profile.baseUrl)) return '缺少 API Key'
   if (!profile.model.trim()) return '缺少模型 ID'
   return null
 }

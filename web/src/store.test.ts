@@ -2,12 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { DEFAULT_PARAMS } from './types'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
-import type { AgentConversation, ExportData, StoredImage, StoredImageThumbnail, TaskRecord } from './types'
+import type { AgentConversation, ExportData, StoredImage, StoredImageThumbnail, StoredServerAsset, TaskRecord } from './types'
 import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
 vi.mock('./lib/db', () => {
   const tasks = new Map<string, TaskRecord>()
   const images = new Map<string, StoredImage>()
   const thumbnails = new Map<string, StoredImageThumbnail>()
+  const serverAssets = new Map<string, StoredServerAsset>()
   const agentConversations = new Map<string, AgentConversation>()
   let imageSeq = 0
 
@@ -23,6 +24,17 @@ vi.mock('./lib/db', () => {
     },
     clearTasks: async () => {
       tasks.clear()
+    },
+    getAllServerAssets: async () => [...serverAssets.values()],
+    putServerAsset: async (asset: StoredServerAsset) => {
+      serverAssets.set(asset.id, asset)
+      return asset.id
+    },
+    deleteServerAsset: async (id: string) => {
+      serverAssets.delete(id)
+    },
+    clearServerAssets: async () => {
+      serverAssets.clear()
     },
     getAllAgentConversations: async () => [...agentConversations.values()],
     putAgentConversation: async (conversation: AgentConversation) => {
@@ -95,9 +107,17 @@ vi.mock('./lib/agentApi', () => ({
     }
   }),
 }))
+vi.mock('./lib/backendTasks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/backendTasks')>()
+  return {
+    ...actual,
+    cancelBackendTask: vi.fn(async () => ({ canceled: true })),
+  }
+})
 import { clearAgentConversations, clearImages, getAllAgentConversations, getAllTasks, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
-import { cleanStaleAgentInputDrafts, deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
+import { cancelBackendTask } from './lib/backendTasks'
+import { canCancelQueuedServerTask, cancelQueuedServerTask, cleanStaleAgentInputDrafts, deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -254,6 +274,55 @@ describe('interrupted OpenAI running tasks', () => {
     expect(result.tasks.find((item) => item.id === 'fal-running')).toEqual(falRunning)
     expect(result.tasks.find((item) => item.id === 'custom-running')).toEqual(customAsyncRunning)
     expect(result.tasks.find((item) => item.id === 'done-task')).toEqual(doneTask)
+  })
+})
+
+describe('queued backend task cancellation', () => {
+  beforeEach(async () => {
+    await clearImages()
+    vi.mocked(cancelBackendTask).mockClear()
+    vi.mocked(cancelBackendTask).mockResolvedValue({ canceled: true })
+    useStore.setState({
+      tasks: [],
+      streamPreviews: {},
+      toast: null,
+      showToast: vi.fn(),
+    })
+  })
+
+  it('only treats queued backend tasks as cancelable', () => {
+    expect(canCancelQueuedServerTask(task({ status: 'running', serverTaskId: 'server-task', serverTaskStatus: 'queued' }))).toBe(true)
+    expect(canCancelQueuedServerTask(task({ status: 'running', serverTaskId: 'server-task', serverTaskStatus: 'running' }))).toBe(false)
+    expect(canCancelQueuedServerTask(task({ status: 'done', serverTaskId: 'server-task', serverTaskStatus: 'queued' }))).toBe(false)
+    expect(canCancelQueuedServerTask(task({ status: 'running', serverTaskStatus: 'queued' }))).toBe(false)
+  })
+
+  it('cancels a queued backend task and marks the local task as canceled', async () => {
+    const queuedTask = task({
+      id: 'local-task',
+      status: 'running',
+      serverTaskId: 'server-task',
+      serverTaskStatus: 'queued',
+      createdAt: 1_000,
+      finishedAt: null,
+      elapsed: null,
+    })
+    useStore.setState({ tasks: [queuedTask] })
+    const now = vi.spyOn(Date, 'now').mockReturnValue(4_000)
+
+    await expect(cancelQueuedServerTask(queuedTask)).resolves.toBe(true)
+
+    expect(cancelBackendTask).toHaveBeenCalledWith('server-task')
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      id: 'local-task',
+      status: 'error',
+      serverTaskStatus: 'canceled',
+      error: '任务已取消。',
+      finishedAt: 4_000,
+      elapsed: 3_000,
+    })
+    expect(useStore.getState().showToast).toHaveBeenCalledWith('已取消排队任务', 'success')
+    now.mockRestore()
   })
 })
 

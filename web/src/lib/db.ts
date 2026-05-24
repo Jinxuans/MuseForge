@@ -1,10 +1,11 @@
-import type { AgentConversation, TaskRecord, StoredImage, StoredImageThumbnail } from '../types'
+import type { AgentConversation, TaskRecord, StoredImage, StoredImageThumbnail, StoredServerAsset } from '../types'
 
 const DB_NAME = 'museforge'
-const DB_VERSION = 3
+const DB_VERSION = 4
 const STORE_TASKS = 'tasks'
 const STORE_IMAGES = 'images'
 const STORE_THUMBNAILS = 'thumbnails'
+const STORE_SERVER_ASSETS = 'serverAssets'
 const STORE_AGENT_CONVERSATIONS = 'agentConversations'
 const THUMBNAIL_MAX_SIZE = 720
 const THUMBNAIL_QUALITY = 0.9
@@ -25,6 +26,9 @@ function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_THUMBNAILS)) {
         db.createObjectStore(STORE_THUMBNAILS, { keyPath: 'id' })
+      }
+      if (!db.objectStoreNames.contains(STORE_SERVER_ASSETS)) {
+        db.createObjectStore(STORE_SERVER_ASSETS, { keyPath: 'id' })
       }
       if (!db.objectStoreNames.contains(STORE_AGENT_CONVERSATIONS)) {
         db.createObjectStore(STORE_AGENT_CONVERSATIONS, { keyPath: 'id' })
@@ -68,6 +72,24 @@ export function deleteTask(id: string): Promise<undefined> {
 
 export function clearTasks(): Promise<undefined> {
   return dbTransaction(STORE_TASKS, 'readwrite', (s) => s.clear())
+}
+
+// ===== Server assets =====
+
+export function getAllServerAssets(): Promise<StoredServerAsset[]> {
+  return dbTransaction(STORE_SERVER_ASSETS, 'readonly', (s) => s.getAll())
+}
+
+export function putServerAsset(asset: StoredServerAsset): Promise<IDBValidKey> {
+  return dbTransaction(STORE_SERVER_ASSETS, 'readwrite', (s) => s.put(asset))
+}
+
+export function deleteServerAsset(id: string): Promise<undefined> {
+  return dbTransaction(STORE_SERVER_ASSETS, 'readwrite', (s) => s.delete(id))
+}
+
+export function clearServerAssets(): Promise<undefined> {
+  return dbTransaction(STORE_SERVER_ASSETS, 'readwrite', (s) => s.clear())
 }
 
 // ===== Agent conversations =====

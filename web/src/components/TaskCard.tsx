@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask } from '../store'
+import { canCancelQueuedServerTask, cancelQueuedServerTask, useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL, DEFAULT_FAL_MODEL } from '../lib/apiProfiles'
@@ -253,10 +253,16 @@ export default function TaskCard({
 
     let cancelled = false
     const imageId = task.outputImages?.[0]
+    const serverCoverUrl = task.serverOutputAssetIds?.length ? task.rawImageUrls?.[0] : ''
     let unsubscribe: (() => void) | undefined
+
+    if (serverCoverUrl) {
+      setThumbSrc(serverCoverUrl)
+    }
 
     const applyThumbnail = (thumbnail: { dataUrl: string; width?: number; height?: number }) => {
       if (cancelled) return
+      if (serverCoverUrl) return
       setThumbSrc(thumbnail.dataUrl)
       if (thumbnail.width && thumbnail.height) {
         setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
@@ -264,7 +270,7 @@ export default function TaskCard({
       }
     }
 
-    if (imageId) {
+    if (imageId && !serverCoverUrl) {
       unsubscribe = subscribeImageThumbnail(imageId, applyThumbnail)
       ensureImageThumbnailCached(imageId).then((thumbnail) => {
         if (cancelled || !thumbnail) return
@@ -278,7 +284,7 @@ export default function TaskCard({
       cancelled = true
       unsubscribe?.()
     }
-  }, [task.outputImages])
+  }, [task.outputImages, task.rawImageUrls, task.serverOutputAssetIds])
 
   const duration = (() => {
     let seconds: number
@@ -296,6 +302,7 @@ export default function TaskCard({
   const showSwipeAction = swipeActionActive
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
+  const isServerQueued = task.status === 'running' && task.serverTaskStatus === 'queued'
   const showRunningTimer = task.status === 'running' || isFalReconnecting || isCustomReconnecting
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
@@ -320,6 +327,7 @@ export default function TaskCard({
   const defaultModelForProvider = task.apiProvider === 'fal' ? DEFAULT_FAL_MODEL : DEFAULT_IMAGES_MODEL
   const showModel = task.apiModel && task.apiModel !== defaultModelForProvider
   const isInterrupted = task.status === 'error' && task.error === '已停止生成。'
+  const showCancelQueued = canCancelQueuedServerTask(task)
 
   return (
     <div className="relative rounded-xl">
@@ -415,7 +423,7 @@ export default function TaskCard({
           {task.status === 'running' && (!streamPreviewSrc || !streamPreviewLoaded) && (
             <div className="flex flex-col items-center gap-2">
               <svg
-                className="w-8 h-8 text-blue-400 animate-spin"
+                className={`w-8 h-8 ${isServerQueued ? 'text-yellow-400' : 'text-blue-400 animate-spin'}`}
                 fill="none"
                 viewBox="0 0 24 24"
               >
@@ -433,7 +441,7 @@ export default function TaskCard({
                   d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                 />
               </svg>
-              <span className="text-xs text-gray-400 dark:text-gray-500">生成中...</span>
+              <span className="text-xs text-gray-400 dark:text-gray-500">{isServerQueued ? '排队中...' : '生成中...'}</span>
             </div>
           )}
           {task.status === 'error' && isFalReconnecting && (
@@ -641,6 +649,17 @@ export default function TaskCard({
               onTouchEnd={(e) => e.stopPropagation()}
               onTouchCancel={(e) => e.stopPropagation()}
             >
+              {showCancelQueued && !task.deletedAt && (
+                <TaskActionButton
+                  tooltip="取消排队任务"
+                  onClick={() => { void cancelQueuedServerTask(task) }}
+                  className="p-1.5 rounded-md hover:bg-yellow-50 dark:hover:bg-yellow-500/10 text-gray-400 hover:text-yellow-500 transition"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </TaskActionButton>
+              )}
               {((task.status === 'error' && !isFalReconnecting) || settings.alwaysShowRetryButton) && (
                 <TaskActionButton
                   tooltip="重试任务"

@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import {
+  canCancelQueuedServerTask,
+  cancelQueuedServerTask,
   editOutputs,
   moveTasksToTrash,
   removeTask,
@@ -69,10 +71,11 @@ export default function TaskContextMenu() {
   if (!menuInfo || !task) return null
 
   const close = () => setMenuInfo(null)
-  const run = (action: (task: TaskRecord) => void | Promise<void>) => {
+  const run = (action: (task: TaskRecord) => void | Promise<unknown>) => {
     close()
     void action(task)
   }
+  const showCancelQueued = canCancelQueuedServerTask(task)
   const confirmDelete = (taskToDelete: TaskRecord) => {
     setConfirmDialog({
       title: taskToDelete.deletedAt ? '彻底删除记录' : '移入回收站',
@@ -92,7 +95,7 @@ export default function TaskContextMenu() {
   let left = menuInfo.x
   let top = menuInfo.y
   const width = 172
-  const height = task.deletedAt ? 244 : 286
+  const height = task.deletedAt ? 244 : showCancelQueued ? 326 : 286
   if (left + width > window.innerWidth) left -= width
   if (top + height > window.innerHeight) top -= height
 
@@ -119,6 +122,9 @@ export default function TaskContextMenu() {
       </MenuButton>
       {!task.deletedAt && (
         <MenuButton onClick={() => run((item) => setMoveCategoryTaskIds([item.id]))}>移动分类</MenuButton>
+      )}
+      {showCancelQueued && !task.deletedAt && (
+        <MenuButton onClick={() => run(cancelQueuedServerTask)}>取消排队任务</MenuButton>
       )}
       {task.deletedAt && (
         <MenuButton onClick={() => run((item) => restoreTasksFromTrash([item.id]))}>恢复记录</MenuButton>
