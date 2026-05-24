@@ -3,14 +3,33 @@ package tasks
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
+var ErrInvalidCursor = errors.New("invalid cursor")
+
 type Repository struct {
 	db *sql.DB
+}
+
+type TaskPage struct {
+	Items      []Task
+	NextCursor string
+}
+
+type AssetPage struct {
+	Items      []Asset
+	NextCursor string
+}
+
+type pageCursor struct {
+	CreatedAt time.Time
+	ID        string
 }
 
 func NewRepository(db *sql.DB) *Repository {
@@ -60,20 +79,43 @@ func (r *Repository) createTask(ctx context.Context, taskType string, clientHash
 }
 
 func (r *Repository) List(ctx context.Context, clientHash string, limit int) ([]Task, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 50
-	}
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, type, model, prompt, params_json, status, COALESCE(error, ''),
-			COALESCE(last_error, ''), attempt_count, max_attempts, next_run_at,
-			provider_base_url_snapshot, created_at, started_at, completed_at
-		FROM tasks
-		WHERE anonymous_token_hash = $1
-		ORDER BY created_at DESC
-		LIMIT $2
-	`, clientHash, limit)
+	page, err := r.ListPage(ctx, clientHash, "", limit)
+	return page.Items, err
+}
+
+func (r *Repository) ListPage(ctx context.Context, clientHash string, cursor string, limit int) (TaskPage, error) {
+	limit = normalizeLimit(limit, 50, 100)
+	fetchLimit := limit + 1
+	decoded, err := decodePageCursor(cursor)
 	if err != nil {
-		return nil, err
+		return TaskPage{}, err
+	}
+
+	var rows *sql.Rows
+	if decoded == nil {
+		rows, err = r.db.QueryContext(ctx, `
+			SELECT id, type, model, prompt, params_json, status, COALESCE(error, ''),
+				COALESCE(last_error, ''), attempt_count, max_attempts, next_run_at,
+				provider_base_url_snapshot, created_at, started_at, completed_at
+			FROM tasks
+			WHERE anonymous_token_hash = $1
+			ORDER BY created_at DESC, id DESC
+			LIMIT $2
+		`, clientHash, fetchLimit)
+	} else {
+		rows, err = r.db.QueryContext(ctx, `
+			SELECT id, type, model, prompt, params_json, status, COALESCE(error, ''),
+				COALESCE(last_error, ''), attempt_count, max_attempts, next_run_at,
+				provider_base_url_snapshot, created_at, started_at, completed_at
+			FROM tasks
+			WHERE anonymous_token_hash = $1
+				AND (created_at < $2 OR (created_at = $2 AND id < $3::uuid))
+			ORDER BY created_at DESC, id DESC
+			LIMIT $4
+		`, clientHash, decoded.CreatedAt, decoded.ID, fetchLimit)
+	}
+	if err != nil {
+		return TaskPage{}, err
 	}
 	defer rows.Close()
 
@@ -81,14 +123,25 @@ func (r *Repository) List(ctx context.Context, clientHash string, limit int) ([]
 	for rows.Next() {
 		var task Task
 		if err := scanTask(rows, &task); err != nil {
-			return nil, err
+			return TaskPage{}, err
 		}
 		list = append(list, task)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return TaskPage{}, err
 	}
-	return r.attachAssets(ctx, clientHash, list)
+
+	var nextCursor string
+	if len(list) > limit {
+		list = list[:limit]
+		last := list[len(list)-1]
+		nextCursor = encodePageCursor(last.CreatedAt, last.ID)
+	}
+	items, err := r.attachAssets(ctx, clientHash, list)
+	if err != nil {
+		return TaskPage{}, err
+	}
+	return TaskPage{Items: items, NextCursor: nextCursor}, nil
 }
 
 func (r *Repository) Get(ctx context.Context, clientHash string, id string) (*Task, error) {
@@ -230,20 +283,21 @@ func (r *Repository) RecoverRunning(ctx context.Context) error {
 func (r *Repository) CreateAsset(ctx context.Context, asset Asset) error {
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO assets (
-			id, task_id, storage_key, public_url, mime, width, height, size_bytes, sha256
+			id, task_id, project_id, kind, storage_key, public_url, mime, width, height, size_bytes, sha256, visibility
 		)
-		VALUES ($1, $2, $3, $4, $5, NULLIF($6, 0), NULLIF($7, 0), $8, $9)
-	`, asset.ID, asset.TaskID, asset.StorageKey, asset.PublicURL, asset.MIME, asset.Width, asset.Height, asset.SizeBytes, asset.SHA256)
+		VALUES ($1, $2, NULLIF($3, ''), COALESCE(NULLIF($4, ''), 'output'), $5, $6, $7, NULLIF($8, 0), NULLIF($9, 0), $10, $11, COALESCE(NULLIF($12, ''), 'private'))
+	`, asset.ID, asset.TaskID, asset.ProjectID, asset.Kind, asset.StorageKey, asset.PublicURL, asset.MIME, asset.Width, asset.Height, asset.SizeBytes, asset.SHA256, asset.Visibility)
 	return err
 }
 
 func (r *Repository) ListAssetsByTask(ctx context.Context, clientHash string, taskID string) ([]Asset, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT a.id, a.task_id, t.type, t.prompt, a.storage_key, a.public_url, a.mime,
-			COALESCE(a.width, 0), COALESCE(a.height, 0), a.size_bytes, a.sha256, a.created_at
+		SELECT a.id, a.task_id, COALESCE(a.project_id, ''), COALESCE(a.kind, 'output'), t.type, t.prompt, a.storage_key, a.public_url, a.mime,
+			COALESCE(a.width, 0), COALESCE(a.height, 0), a.size_bytes, a.sha256,
+			COALESCE(a.visibility, 'private'), a.created_at
 		FROM assets a
 		JOIN tasks t ON t.id = a.task_id
-		WHERE a.task_id = $1 AND t.anonymous_token_hash = $2
+		WHERE a.task_id = $1 AND t.anonymous_token_hash = $2 AND a.deleted_at IS NULL
 		ORDER BY a.created_at
 	`, taskID, clientHash)
 	if err != nil {
@@ -254,34 +308,89 @@ func (r *Repository) ListAssetsByTask(ctx context.Context, clientHash string, ta
 }
 
 func (r *Repository) ListAssets(ctx context.Context, clientHash string, limit int) ([]Asset, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 100
+	page, err := r.ListAssetsPage(ctx, clientHash, "", limit)
+	return page.Items, err
+}
+
+func (r *Repository) ListAssetsByTaskPage(ctx context.Context, clientHash string, taskID string, cursor string, limit int) (AssetPage, error) {
+	return r.ListAssetsFilteredPage(ctx, clientHash, taskID, "", "", cursor, limit)
+}
+
+func (r *Repository) ListAssetsPage(ctx context.Context, clientHash string, cursor string, limit int) (AssetPage, error) {
+	return r.ListAssetsFilteredPage(ctx, clientHash, "", "", "", cursor, limit)
+}
+
+func (r *Repository) ListAssetsFilteredPage(ctx context.Context, clientHash string, taskID string, projectID string, kind string, cursor string, limit int) (AssetPage, error) {
+	limit = normalizeLimit(limit, 100, 200)
+	fetchLimit := limit + 1
+	decoded, err := decodePageCursor(cursor)
+	if err != nil {
+		return AssetPage{}, err
 	}
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT a.id, a.task_id, t.type, t.prompt, a.storage_key, a.public_url, a.mime,
-			COALESCE(a.width, 0), COALESCE(a.height, 0), a.size_bytes, a.sha256, a.created_at
+
+	args := []any{clientHash}
+	where := []string{"t.anonymous_token_hash = $1", "a.deleted_at IS NULL"}
+	if taskID != "" {
+		args = append(args, taskID)
+		where = append(where, fmt.Sprintf("a.task_id = $%d", len(args)))
+	}
+	if projectID != "" {
+		args = append(args, projectID)
+		where = append(where, fmt.Sprintf("a.project_id = $%d", len(args)))
+	}
+	if kind != "" {
+		args = append(args, kind)
+		where = append(where, fmt.Sprintf("a.kind = $%d", len(args)))
+	}
+	if decoded != nil {
+		args = append(args, decoded.CreatedAt, decoded.ID)
+		where = append(where, fmt.Sprintf("(a.created_at < $%d OR (a.created_at = $%d AND a.id < $%d::uuid))", len(args)-1, len(args)-1, len(args)))
+	}
+	args = append(args, fetchLimit)
+
+	query := fmt.Sprintf(`
+		SELECT a.id, a.task_id, COALESCE(a.project_id, ''), COALESCE(a.kind, 'output'), t.type, t.prompt, a.storage_key, a.public_url, a.mime,
+			COALESCE(a.width, 0), COALESCE(a.height, 0), a.size_bytes, a.sha256,
+			COALESCE(a.visibility, 'private'), a.created_at
 		FROM assets a
 		JOIN tasks t ON t.id = a.task_id
-		WHERE t.anonymous_token_hash = $1
-		ORDER BY a.created_at DESC
-		LIMIT $2
-	`, clientHash, limit)
+		WHERE %s
+		ORDER BY a.created_at DESC, a.id DESC
+		LIMIT $%d
+	`, strings.Join(where, " AND "), len(args))
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return AssetPage{}, err
 	}
 	defer rows.Close()
-	return scanAssets(rows)
+
+	return assetPageFromRows(rows, limit)
+}
+
+func assetPageFromRows(rows *sql.Rows, limit int) (AssetPage, error) {
+	list, err := scanAssets(rows)
+	if err != nil {
+		return AssetPage{}, err
+	}
+	var nextCursor string
+	if len(list) > limit {
+		list = list[:limit]
+		last := list[len(list)-1]
+		nextCursor = encodePageCursor(last.CreatedAt, last.ID)
+	}
+	return AssetPage{Items: list, NextCursor: nextCursor}, nil
 }
 
 func (r *Repository) GetAsset(ctx context.Context, clientHash string, id string) (*Asset, error) {
 	var asset Asset
 	err := r.db.QueryRowContext(ctx, `
-		SELECT a.id, a.task_id, t.type, t.prompt, a.storage_key, a.public_url, a.mime,
-			COALESCE(a.width, 0), COALESCE(a.height, 0), a.size_bytes, a.sha256, a.created_at
+		SELECT a.id, a.task_id, COALESCE(a.project_id, ''), COALESCE(a.kind, 'output'), t.type, t.prompt, a.storage_key, a.public_url, a.mime,
+			COALESCE(a.width, 0), COALESCE(a.height, 0), a.size_bytes, a.sha256,
+			COALESCE(a.visibility, 'private'), a.created_at
 		FROM assets a
 		JOIN tasks t ON t.id = a.task_id
-		WHERE a.id = $1 AND t.anonymous_token_hash = $2
-	`, id, clientHash).Scan(&asset.ID, &asset.TaskID, &asset.TaskType, &asset.Prompt, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.CreatedAt)
+		WHERE a.id = $1 AND t.anonymous_token_hash = $2 AND a.deleted_at IS NULL
+	`, id, clientHash).Scan(&asset.ID, &asset.TaskID, &asset.ProjectID, &asset.Kind, &asset.TaskType, &asset.Prompt, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.Visibility, &asset.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -300,20 +409,21 @@ func (r *Repository) DeleteAsset(ctx context.Context, clientHash string, id stri
 
 	var asset Asset
 	err = tx.QueryRowContext(ctx, `
-		SELECT a.id, a.task_id, t.type, t.prompt, a.storage_key, a.public_url, a.mime,
-			COALESCE(a.width, 0), COALESCE(a.height, 0), a.size_bytes, a.sha256, a.created_at
+		SELECT a.id, a.task_id, COALESCE(a.project_id, ''), COALESCE(a.kind, 'output'), t.type, t.prompt, a.storage_key, a.public_url, a.mime,
+			COALESCE(a.width, 0), COALESCE(a.height, 0), a.size_bytes, a.sha256,
+			COALESCE(a.visibility, 'private'), a.created_at
 		FROM assets a
 		JOIN tasks t ON t.id = a.task_id
-		WHERE a.id = $1 AND t.anonymous_token_hash = $2
+		WHERE a.id = $1 AND t.anonymous_token_hash = $2 AND a.deleted_at IS NULL
 		FOR UPDATE
-	`, id, clientHash).Scan(&asset.ID, &asset.TaskID, &asset.TaskType, &asset.Prompt, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.CreatedAt)
+	`, id, clientHash).Scan(&asset.ID, &asset.TaskID, &asset.ProjectID, &asset.Kind, &asset.TaskType, &asset.Prompt, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.Visibility, &asset.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM assets WHERE id = $1`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE assets SET deleted_at = now() WHERE id = $1`, id); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -328,9 +438,9 @@ func (r *Repository) DeleteAssetsOlderThan(ctx context.Context, before time.Time
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		WITH doomed AS (
-			SELECT id, task_id, storage_key, public_url, mime,
+			SELECT id, task_id, COALESCE(project_id, '') AS project_id, COALESCE(kind, 'output') AS kind, storage_key, public_url, mime,
 				COALESCE(width, 0) AS width, COALESCE(height, 0) AS height,
-				size_bytes, sha256, created_at
+				size_bytes, sha256, COALESCE(visibility, 'private') AS visibility, created_at
 			FROM assets
 			WHERE created_at < $1
 			ORDER BY created_at
@@ -340,10 +450,10 @@ func (r *Repository) DeleteAssetsOlderThan(ctx context.Context, before time.Time
 			DELETE FROM assets a
 			USING doomed d
 			WHERE a.id = d.id
-			RETURNING d.id, d.task_id, d.storage_key, d.public_url, d.mime,
-				d.width, d.height, d.size_bytes, d.sha256, d.created_at
+			RETURNING d.id, d.task_id, d.project_id, d.kind, d.storage_key, d.public_url, d.mime,
+				d.width, d.height, d.size_bytes, d.sha256, d.visibility, d.created_at
 		)
-		SELECT id, task_id, storage_key, public_url, mime, width, height, size_bytes, sha256, created_at
+		SELECT id, task_id, project_id, kind, storage_key, public_url, mime, width, height, size_bytes, sha256, visibility, created_at
 		FROM deleted
 	`, before, limit)
 	if err != nil {
@@ -354,7 +464,7 @@ func (r *Repository) DeleteAssetsOlderThan(ctx context.Context, before time.Time
 	var list []Asset
 	for rows.Next() {
 		var asset Asset
-		if err := rows.Scan(&asset.ID, &asset.TaskID, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.CreatedAt); err != nil {
+		if err := rows.Scan(&asset.ID, &asset.TaskID, &asset.ProjectID, &asset.Kind, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.Visibility, &asset.CreatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, asset)
@@ -376,7 +486,7 @@ func scanAssets(rows *sql.Rows) ([]Asset, error) {
 	var list []Asset
 	for rows.Next() {
 		var asset Asset
-		if err := rows.Scan(&asset.ID, &asset.TaskID, &asset.TaskType, &asset.Prompt, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.CreatedAt); err != nil {
+		if err := rows.Scan(&asset.ID, &asset.TaskID, &asset.ProjectID, &asset.Kind, &asset.TaskType, &asset.Prompt, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.Visibility, &asset.CreatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, asset)
@@ -431,4 +541,39 @@ func intervalString(delay time.Duration) string {
 		seconds = 1
 	}
 	return fmt.Sprintf("%d seconds", seconds)
+}
+
+func normalizeLimit(value int, fallback int, max int) int {
+	if value <= 0 {
+		return fallback
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func encodePageCursor(createdAt time.Time, id string) string {
+	raw := createdAt.UTC().Format(time.RFC3339Nano) + "|" + id
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+func decodePageCursor(value string) (*pageCursor, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return nil, ErrInvalidCursor
+	}
+	createdAtText, id, ok := strings.Cut(string(decoded), "|")
+	if !ok || strings.TrimSpace(id) == "" {
+		return nil, ErrInvalidCursor
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, createdAtText)
+	if err != nil {
+		return nil, ErrInvalidCursor
+	}
+	return &pageCursor{CreatedAt: createdAt, ID: id}, nil
 }

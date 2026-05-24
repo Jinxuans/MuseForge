@@ -132,22 +132,28 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/health":
 		s.handleHealth(lrw, r)
-	case r.URL.Path == "/api/tasks/generations" && r.Method == http.MethodPost:
-		s.handleCreateGenerationTask(lrw, r)
-	case r.URL.Path == "/api/tasks/edits" && r.Method == http.MethodPost:
-		s.handleCreateEditTask(lrw, r)
-	case r.URL.Path == "/api/tasks" && r.Method == http.MethodGet:
-		s.handleListTasks(lrw, r)
-	case strings.HasPrefix(r.URL.Path, "/api/tasks/"):
-		s.handleTaskByID(lrw, r)
-	case r.URL.Path == "/api/assets" && r.Method == http.MethodGet:
-		s.handleListAssets(lrw, r)
-	case strings.HasPrefix(r.URL.Path, "/api/assets/"):
-		s.handleAssetByID(lrw, r)
-	case r.URL.Path == "/api/provider-profiles" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
-		s.handleProviderProfiles(lrw, r)
-	case strings.HasPrefix(r.URL.Path, "/api/provider-profiles/"):
-		s.handleProviderProfileByID(lrw, r)
+	case r.URL.Path == "/api/v1/health-capabilities" && r.Method == http.MethodGet:
+		s.handleV1Capabilities(lrw, r)
+	case r.URL.Path == "/api/v1/me" && r.Method == http.MethodGet:
+		s.handleV1Me(lrw, r)
+	case r.URL.Path == "/api/v1/auth/logout" && r.Method == http.MethodPost:
+		s.handleV1AuthLogout(lrw, r)
+	case r.URL.Path == "/api/v1/tasks/generations" && r.Method == http.MethodPost:
+		s.handleV1Envelope(lrw, r, s.handleCreateGenerationTask)
+	case r.URL.Path == "/api/v1/tasks/edits" && r.Method == http.MethodPost:
+		s.handleV1Envelope(lrw, r, s.handleCreateEditTask)
+	case r.URL.Path == "/api/v1/tasks" && r.Method == http.MethodGet:
+		s.handleV1Envelope(lrw, r, s.handleListTasks)
+	case strings.HasPrefix(r.URL.Path, "/api/v1/tasks/"):
+		s.handleV1Envelope(lrw, r, s.handleTaskByID)
+	case r.URL.Path == "/api/v1/assets" && r.Method == http.MethodGet:
+		s.handleV1Envelope(lrw, r, s.handleListAssets)
+	case strings.HasPrefix(r.URL.Path, "/api/v1/assets/"):
+		s.handleV1Envelope(lrw, r, s.handleAssetByID)
+	case r.URL.Path == "/api/v1/provider-profiles" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
+		s.handleV1Envelope(lrw, r, s.handleProviderProfiles)
+	case strings.HasPrefix(r.URL.Path, "/api/v1/provider-profiles/"):
+		s.handleV1Envelope(lrw, r, s.handleProviderProfileByID)
 	case strings.HasPrefix(r.URL.Path, "/files/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		s.handleFile(lrw, r)
 	case (r.URL.Path == "/images/generations" || r.URL.Path == "/v1/images/generations") && r.Method == http.MethodPost:
@@ -194,6 +200,321 @@ func (w *loggingResponseWriter) Write(data []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(data)
 	w.bytes += int64(n)
 	return n, err
+}
+
+type captureResponseWriter struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func newCaptureResponseWriter() *captureResponseWriter {
+	return &captureResponseWriter{header: make(http.Header), status: http.StatusOK}
+}
+
+func (w *captureResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *captureResponseWriter) WriteHeader(status int) {
+	w.status = status
+}
+
+func (w *captureResponseWriter) Write(data []byte) (int, error) {
+	return w.body.Write(data)
+}
+
+func (s *Server) handleV1Capabilities(w http.ResponseWriter, r *http.Request) {
+	upstreamBaseURL, err := s.resolveUpstreamBaseURL("")
+	if err != nil {
+		v1ErrorResponse(w, r, http.StatusBadRequest, "invalid_upstream_base_url", err.Error())
+		return
+	}
+
+	v1Response(w, r, http.StatusOK, map[string]any{
+		"asyncTasks":            s.repo != nil && s.worker != nil,
+		"assets":                s.repo != nil && s.store != nil,
+		"providerProfiles":      s.providers != nil,
+		"square":                false,
+		"auth":                  false,
+		"defaultProviderApiKey": s.cfg.DefaultProviderAPIKey != "",
+		"upstreamBaseUrl":       upstreamBaseURL,
+	})
+}
+
+func (s *Server) handleV1Envelope(w http.ResponseWriter, r *http.Request, handler func(http.ResponseWriter, *http.Request)) {
+	capture := newCaptureResponseWriter()
+	handler(capture, r)
+
+	for name, values := range capture.Header() {
+		if strings.EqualFold(name, "Content-Type") || strings.EqualFold(name, "Content-Length") {
+			continue
+		}
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(capture.body.Bytes(), &payload); err != nil {
+		v1ErrorResponse(w, r, http.StatusInternalServerError, "invalid_handler_response", "Internal server error.")
+		return
+	}
+	if capture.status >= http.StatusBadRequest {
+		v1ErrorResponse(w, r, capture.status, errorCodeFromPayload(capture.status, payload), errorMessageFromPayload(payload))
+		return
+	}
+	v1Response(w, r, capture.status, v1DataFromHandlerPayload(payload))
+}
+
+func v1DataFromHandlerPayload(payload map[string]any) any {
+	if task, ok := payload["task"].(map[string]any); ok {
+		return map[string]any{"task": v1TaskDTO(task)}
+	}
+	if tasks, ok := payload["tasks"].([]any); ok {
+		items := make([]any, 0, len(tasks))
+		for _, item := range tasks {
+			if task, ok := item.(map[string]any); ok {
+				items = append(items, v1TaskDTO(task))
+			}
+		}
+		return map[string]any{"items": items, "tasks": items, "nextCursor": nullableStringValue(payload["nextCursor"])}
+	}
+	if asset, ok := payload["asset"].(map[string]any); ok {
+		return map[string]any{"asset": v1AssetDTO(asset)}
+	}
+	if assets, ok := payload["assets"].([]any); ok {
+		items := make([]any, 0, len(assets))
+		for _, item := range assets {
+			if asset, ok := item.(map[string]any); ok {
+				items = append(items, v1AssetDTO(asset))
+			}
+		}
+		return map[string]any{"items": items, "assets": items, "nextCursor": nullableStringValue(payload["nextCursor"])}
+	}
+	if profile, ok := payload["provider_profile"].(map[string]any); ok {
+		return map[string]any{"provider_profile": v1ProviderProfileDTO(profile)}
+	}
+	if profiles, ok := payload["provider_profiles"].([]any); ok {
+		items := make([]any, 0, len(profiles))
+		for _, item := range profiles {
+			if profile, ok := item.(map[string]any); ok {
+				items = append(items, v1ProviderProfileDTO(profile))
+			}
+		}
+		return map[string]any{"items": items, "provider_profiles": items, "nextCursor": nil}
+	}
+	return payload
+}
+
+func v1TaskDTO(task map[string]any) map[string]any {
+	params := objectValue(task["params"])
+	if params == nil {
+		params = objectValue(task["params_json"])
+	}
+	assets := arrayValue(task["assets"])
+	outputAssets := make([]any, 0, len(assets))
+	for _, item := range assets {
+		if asset, ok := item.(map[string]any); ok {
+			outputAssets = append(outputAssets, v1AssetDTO(asset))
+		}
+	}
+	return map[string]any{
+		"id":                      task["id"],
+		"type":                    v1TaskType(stringValue(task["type"])),
+		"status":                  task["status"],
+		"prompt":                  task["prompt"],
+		"model":                   task["model"],
+		"providerBaseUrlSnapshot": task["provider_base_url_snapshot"],
+		"params":                  params,
+		"inputAssets":             []any{},
+		"outputAssets":            outputAssets,
+		"assets":                  outputAssets,
+		"error":                   nullableStringValue(task["error"]),
+		"lastError":               nullableStringValue(task["last_error"]),
+		"attemptCount":            numberValue(task["attempt_count"]),
+		"maxAttempts":             numberValue(task["max_attempts"]),
+		"nextRunAt":               nullableStringValue(task["next_run_at"]),
+		"createdAt":               task["created_at"],
+		"startedAt":               nullableStringValue(task["started_at"]),
+		"completedAt":             nullableStringValue(task["completed_at"]),
+		"projectId":               nilString(),
+		"owner":                   map[string]any{"type": "anonymous", "id": "current"},
+	}
+}
+
+func v1AssetDTO(asset map[string]any) map[string]any {
+	return map[string]any{
+		"id":           asset["id"],
+		"taskId":       asset["task_id"],
+		"taskType":     asset["task_type"],
+		"projectId":    nullableStringValue(asset["project_id"]),
+		"kind":         stringValueDefault(asset["kind"], "output"),
+		"prompt":       asset["prompt"],
+		"storageKey":   asset["storage_key"],
+		"publicUrl":    asset["public_url"],
+		"thumbnailUrl": nilString(),
+		"mime":         asset["mime"],
+		"width":        numberValue(asset["width"]),
+		"height":       numberValue(asset["height"]),
+		"sizeBytes":    numberValue(asset["size_bytes"]),
+		"sha256":       asset["sha256"],
+		"visibility":   stringValueDefault(asset["visibility"], "private"),
+		"metadata":     map[string]any{},
+		"createdAt":    asset["created_at"],
+	}
+}
+
+func v1ProviderProfileDTO(profile map[string]any) map[string]any {
+	return map[string]any{
+		"id":             profile["id"],
+		"name":           profile["name"],
+		"type":           profile["type"],
+		"baseUrl":        profile["base_url"],
+		"apiKeyHint":     profile["api_key_hint"],
+		"model":          profile["model"],
+		"apiMode":        profile["api_mode"],
+		"providerConfig": objectValue(profile["provider_config_json"]),
+		"createdAt":      profile["created_at"],
+		"deletedAt":      nullableStringValue(profile["deleted_at"]),
+	}
+}
+
+func v1TaskType(taskType string) string {
+	switch taskType {
+	case tasks.TypeGeneration:
+		return "image_generation"
+	case tasks.TypeEdit:
+		return "image_edit"
+	default:
+		return taskType
+	}
+}
+
+func objectValue(value any) map[string]any {
+	if record, ok := value.(map[string]any); ok {
+		return record
+	}
+	return map[string]any{}
+}
+
+func arrayValue(value any) []any {
+	if list, ok := value.([]any); ok {
+		return list
+	}
+	return nil
+}
+
+func stringValue(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
+}
+
+func stringValueDefault(value any, fallback string) string {
+	text := strings.TrimSpace(stringValue(value))
+	if text == "" {
+		return fallback
+	}
+	return text
+}
+
+func nullableStringValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	if text, ok := value.(string); ok {
+		if strings.TrimSpace(text) == "" {
+			return nil
+		}
+		return text
+	}
+	return value
+}
+
+func numberValue(value any) any {
+	if value == nil {
+		return 0
+	}
+	return value
+}
+
+func nilString() any {
+	return nil
+}
+
+func v1Response(w http.ResponseWriter, r *http.Request, status int, data any) {
+	jsonResponse(w, status, map[string]any{
+		"ok":        true,
+		"data":      data,
+		"requestId": requestIDFromContext(r.Context()),
+	})
+}
+
+func v1ErrorResponse(w http.ResponseWriter, r *http.Request, status int, code string, message string) {
+	if strings.TrimSpace(message) == "" {
+		message = http.StatusText(status)
+	}
+	jsonResponse(w, status, map[string]any{
+		"ok": false,
+		"error": map[string]any{
+			"code":    code,
+			"message": message,
+		},
+		"requestId": requestIDFromContext(r.Context()),
+	})
+}
+
+func errorMessageFromPayload(payload map[string]any) string {
+	if errorValue, ok := payload["error"]; ok {
+		if errorMap, ok := errorValue.(map[string]any); ok {
+			if message, ok := errorMap["message"].(string); ok && strings.TrimSpace(message) != "" {
+				return message
+			}
+		}
+		if message, ok := errorValue.(string); ok && strings.TrimSpace(message) != "" {
+			return message
+		}
+	}
+	if message, ok := payload["message"].(string); ok && strings.TrimSpace(message) != "" {
+		return message
+	}
+	return "Request failed."
+}
+
+func errorCodeFromPayload(status int, payload map[string]any) string {
+	if errorValue, ok := payload["error"]; ok {
+		if errorMap, ok := errorValue.(map[string]any); ok {
+			if code, ok := errorMap["code"].(string); ok && strings.TrimSpace(code) != "" {
+				return code
+			}
+		}
+	}
+	switch status {
+	case http.StatusBadRequest:
+		return "invalid_request"
+	case http.StatusUnauthorized:
+		return "unauthorized"
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusServiceUnavailable:
+		return "service_unavailable"
+	default:
+		if status >= http.StatusInternalServerError {
+			return "internal_error"
+		}
+		return "request_failed"
+	}
+}
+
+func requestIDFromContext(ctx context.Context) string {
+	if value, ok := ctx.Value(requestIDContextKey{}).(string); ok && strings.TrimSpace(value) != "" {
+		return value
+	}
+	return newRequestID()
 }
 
 func requestIDFrom(r *http.Request) string {
@@ -449,12 +770,16 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	list, err := s.repo.List(r.Context(), clientHash, 50)
+	page, err := s.repo.ListPage(r.Context(), clientHash, strings.TrimSpace(r.URL.Query().Get("cursor")), queryLimit(r, 50, 100))
 	if err != nil {
+		if errors.Is(err, tasks.ErrInvalidCursor) {
+			jsonResponse(w, http.StatusBadRequest, errorPayload("Invalid cursor."))
+			return
+		}
 		jsonResponse(w, http.StatusInternalServerError, errorPayload(err.Error()))
 		return
 	}
-	jsonResponse(w, http.StatusOK, map[string]any{"tasks": list})
+	jsonResponse(w, http.StatusOK, map[string]any{"tasks": page.Items, "nextCursor": page.NextCursor})
 }
 
 func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
@@ -462,7 +787,7 @@ func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusServiceUnavailable, errorPayload("Async task API requires DATABASE_URL."))
 		return
 	}
-	rest := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/tasks/")
 	id, action, _ := strings.Cut(rest, "/")
 	if id == "" {
 		jsonResponse(w, http.StatusNotFound, errorPayload("Not found."))
@@ -502,6 +827,17 @@ func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListAssets(w http.ResponseWriter, r *http.Request) {
+	kind, ok := parseAssetKindFilter(r.URL.Query().Get("kind"))
+	if !ok {
+		jsonResponse(w, http.StatusBadRequest, errorPayload("Invalid asset kind."))
+		return
+	}
+	taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
+	if taskID != "" && !isUUIDText(taskID) {
+		jsonResponse(w, http.StatusBadRequest, errorPayload("Invalid task id."))
+		return
+	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
 	if s.repo == nil {
 		jsonResponse(w, http.StatusServiceUnavailable, errorPayload("Asset API requires DATABASE_URL."))
 		return
@@ -510,12 +846,58 @@ func (s *Server) handleListAssets(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	assets, err := s.repo.ListAssets(r.Context(), clientHash, 100)
+	cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	limit := queryLimit(r, 100, 200)
+	var page tasks.AssetPage
+	var err error
+	page, err = s.repo.ListAssetsFilteredPage(r.Context(), clientHash, taskID, projectID, kind, cursor, limit)
 	if err != nil {
+		if errors.Is(err, tasks.ErrInvalidCursor) {
+			jsonResponse(w, http.StatusBadRequest, errorPayload("Invalid cursor."))
+			return
+		}
 		jsonResponse(w, http.StatusInternalServerError, errorPayload(err.Error()))
 		return
 	}
-	jsonResponse(w, http.StatusOK, map[string]any{"assets": assets})
+	jsonResponse(w, http.StatusOK, map[string]any{"assets": page.Items, "nextCursor": page.NextCursor})
+}
+
+func parseAssetKindFilter(value string) (string, bool) {
+	kind := strings.TrimSpace(value)
+	if kind == "" {
+		return "", true
+	}
+	switch kind {
+	case "input", "output", "mask", "reference", "thumbnail":
+		return kind, true
+	default:
+		return "", false
+	}
+}
+
+func isUUIDText(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		switch i {
+		case 8, 13, 18, 23:
+			if value[i] != '-' {
+				return false
+			}
+		default:
+			if !isHexByte(value[i]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isHexByte(value byte) bool {
+	return (value >= '0' && value <= '9') ||
+		(value >= 'a' && value <= 'f') ||
+		(value >= 'A' && value <= 'F')
 }
 
 func (s *Server) handleAssetByID(w http.ResponseWriter, r *http.Request) {
@@ -523,12 +905,27 @@ func (s *Server) handleAssetByID(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusServiceUnavailable, errorPayload("Asset API requires DATABASE_URL."))
 		return
 	}
-	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/assets/"), "/")
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/assets/"), "/")
 	if id == "" {
 		jsonResponse(w, http.StatusNotFound, errorPayload("Asset not found."))
 		return
 	}
 	switch r.Method {
+	case http.MethodGet:
+		clientHash, ok := requireClientHash(w, r)
+		if !ok {
+			return
+		}
+		asset, err := s.repo.GetAsset(r.Context(), clientHash, id)
+		if err != nil {
+			jsonResponse(w, http.StatusInternalServerError, errorPayload(err.Error()))
+			return
+		}
+		if asset == nil {
+			jsonResponse(w, http.StatusNotFound, errorPayload("Asset not found."))
+			return
+		}
+		jsonResponse(w, http.StatusOK, map[string]any{"asset": asset})
 	case http.MethodDelete:
 		clientHash, ok := requireClientHash(w, r)
 		if !ok {
@@ -573,10 +970,14 @@ func (s *Server) handleProviderProfiles(w http.ResponseWriter, r *http.Request) 
 		jsonResponse(w, http.StatusOK, map[string]any{"provider_profiles": list})
 	case http.MethodPost:
 		var payload struct {
-			Name    string `json:"name"`
-			Type    string `json:"type"`
-			BaseURL string `json:"base_url"`
-			APIKey  string `json:"api_key"`
+			Name               string          `json:"name"`
+			Type               string          `json:"type"`
+			BaseURL            string          `json:"base_url"`
+			APIKey             string          `json:"api_key"`
+			Model              string          `json:"model"`
+			APIMode            string          `json:"api_mode"`
+			ProviderConfig     json.RawMessage `json:"provider_config"`
+			ProviderConfigJSON json.RawMessage `json:"provider_config_json"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			jsonResponse(w, http.StatusBadRequest, errorPayload("Request body must be JSON."))
@@ -592,7 +993,22 @@ func (s *Server) handleProviderProfiles(w http.ResponseWriter, r *http.Request) 
 			jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
 			return
 		}
-		profile, err := s.providers.Create(r.Context(), clientHash, name, strings.TrimSpace(payload.Type), baseURL, strings.TrimSpace(payload.APIKey))
+		profileType, err := normalizeProviderProfileType(payload.Type)
+		if err != nil {
+			jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
+			return
+		}
+		apiMode, err := normalizeProviderProfileAPIMode(payload.APIMode)
+		if err != nil {
+			jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
+			return
+		}
+		providerConfig, err := normalizeProviderProfileConfig(firstRawJSON(payload.ProviderConfig, payload.ProviderConfigJSON))
+		if err != nil {
+			jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
+			return
+		}
+		profile, err := s.providers.Create(r.Context(), clientHash, name, profileType, baseURL, strings.TrimSpace(payload.APIKey), strings.TrimSpace(payload.Model), apiMode, providerConfig)
 		if err != nil {
 			jsonResponse(w, http.StatusInternalServerError, errorPayload(err.Error()))
 			return
@@ -611,27 +1027,224 @@ func (s *Server) handleProviderProfileByID(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	if r.Method != http.MethodDelete {
-		jsonResponse(w, http.StatusNotFound, errorPayload("Not found."))
-		return
-	}
-	idText := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/provider-profiles/"), "/")
+	idText := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/provider-profiles/"), "/")
 	id, err := strconv.ParseInt(idText, 10, 64)
 	if err != nil || id <= 0 {
 		jsonResponse(w, http.StatusBadRequest, errorPayload("Invalid provider profile id."))
 		return
 	}
-	deleted, err := s.providers.Delete(r.Context(), clientHash, id)
-	if err != nil {
-		jsonResponse(w, http.StatusInternalServerError, errorPayload(err.Error()))
-		return
+	switch r.Method {
+	case http.MethodPatch:
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload == nil {
+			jsonResponse(w, http.StatusBadRequest, errorPayload("Request body must be JSON."))
+			return
+		}
+		name, ok, valid := optionalPayloadString(payload, "name")
+		if !valid {
+			jsonResponse(w, http.StatusBadRequest, errorPayload("name must be a string."))
+			return
+		}
+		if ok {
+			trimmed := strings.TrimSpace(name)
+			if trimmed == "" {
+				jsonResponse(w, http.StatusBadRequest, errorPayload("name cannot be empty."))
+				return
+			}
+			name = trimmed
+		}
+		profileType, hasType, valid := optionalPayloadString(payload, "type")
+		if !valid {
+			jsonResponse(w, http.StatusBadRequest, errorPayload("type must be a string."))
+			return
+		}
+		if hasType {
+			profileType, err = normalizeProviderProfileType(profileType)
+			if err != nil {
+				jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
+				return
+			}
+		}
+		baseURL, hasBaseURL, valid := optionalPayloadString(payload, "base_url", "baseUrl")
+		if !valid {
+			jsonResponse(w, http.StatusBadRequest, errorPayload("base_url must be a string."))
+			return
+		}
+		if hasBaseURL {
+			baseURL, err = s.resolveUpstreamBaseURLNoFallback(baseURL)
+			if err != nil {
+				jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
+				return
+			}
+		}
+		apiKey, hasAPIKey, valid := optionalPayloadString(payload, "api_key", "apiKey")
+		if !valid {
+			jsonResponse(w, http.StatusBadRequest, errorPayload("api_key must be a string."))
+			return
+		}
+		if hasAPIKey {
+			apiKey = strings.TrimSpace(apiKey)
+		}
+		model, hasModel, valid := optionalPayloadString(payload, "model", "default_model", "defaultModel")
+		if !valid {
+			jsonResponse(w, http.StatusBadRequest, errorPayload("model must be a string."))
+			return
+		}
+		if hasModel {
+			model = strings.TrimSpace(model)
+		}
+		apiMode, hasAPIMode, valid := optionalPayloadString(payload, "api_mode", "apiMode")
+		if !valid {
+			jsonResponse(w, http.StatusBadRequest, errorPayload("api_mode must be a string."))
+			return
+		}
+		if hasAPIMode {
+			apiMode, err = normalizeProviderProfileAPIMode(apiMode)
+			if err != nil {
+				jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
+				return
+			}
+		}
+		providerConfig, hasProviderConfig, valid := optionalPayloadJSON(payload, "provider_config", "providerConfig", "provider_config_json")
+		if !valid {
+			jsonResponse(w, http.StatusBadRequest, errorPayload("provider_config must be valid JSON."))
+			return
+		}
+		if hasProviderConfig {
+			providerConfig, err = normalizeProviderProfileConfig(providerConfig)
+			if err != nil {
+				jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
+				return
+			}
+		}
+		profile, err := s.providers.Update(
+			r.Context(),
+			clientHash,
+			id,
+			optionalStringPointer(name, ok),
+			optionalStringPointer(profileType, hasType),
+			optionalStringPointer(baseURL, hasBaseURL),
+			optionalStringPointer(apiKey, hasAPIKey),
+			optionalStringPointer(model, hasModel),
+			optionalStringPointer(apiMode, hasAPIMode),
+			optionalJSONPointer(providerConfig, hasProviderConfig),
+		)
+		if err != nil {
+			jsonResponse(w, http.StatusInternalServerError, errorPayload(err.Error()))
+			return
+		}
+		if profile == nil {
+			jsonResponse(w, http.StatusNotFound, errorPayload("Provider profile not found."))
+			return
+		}
+		slog.Info("provider profile updated", "profile_id", profile.ID, "client", shortHash(clientHash), "base_url", redact.String(profile.BaseURL))
+		jsonResponse(w, http.StatusOK, map[string]any{"provider_profile": profile})
+	case http.MethodDelete:
+		deleted, err := s.providers.Delete(r.Context(), clientHash, id)
+		if err != nil {
+			jsonResponse(w, http.StatusInternalServerError, errorPayload(err.Error()))
+			return
+		}
+		if !deleted {
+			jsonResponse(w, http.StatusNotFound, errorPayload("Provider profile not found."))
+			return
+		}
+		slog.Info("provider profile deleted", "profile_id", id, "client", shortHash(clientHash))
+		jsonResponse(w, http.StatusOK, map[string]any{"deleted": true})
+	default:
+		jsonResponse(w, http.StatusNotFound, errorPayload("Not found."))
 	}
-	if !deleted {
-		jsonResponse(w, http.StatusNotFound, errorPayload("Provider profile not found."))
-		return
+}
+
+func optionalPayloadString(payload map[string]any, keys ...string) (string, bool, bool) {
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		text, ok := value.(string)
+		return text, true, ok
 	}
-	slog.Info("provider profile deleted", "profile_id", id, "client", shortHash(clientHash))
-	jsonResponse(w, http.StatusOK, map[string]any{"deleted": true})
+	return "", false, true
+}
+
+func optionalPayloadJSON(payload map[string]any, keys ...string) (json.RawMessage, bool, bool) {
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, true, false
+		}
+		return raw, true, true
+	}
+	return nil, false, true
+}
+
+func optionalStringPointer(value string, ok bool) *string {
+	if !ok {
+		return nil
+	}
+	return &value
+}
+
+func optionalJSONPointer(value json.RawMessage, ok bool) *json.RawMessage {
+	if !ok {
+		return nil
+	}
+	return &value
+}
+
+func firstRawJSON(values ...json.RawMessage) json.RawMessage {
+	for _, value := range values {
+		if len(value) > 0 && strings.TrimSpace(string(value)) != "" {
+			return value
+		}
+	}
+	return nil
+}
+
+func normalizeProviderProfileType(value string) (string, error) {
+	switch strings.TrimSpace(value) {
+	case "":
+		return "openai", nil
+	case "openai", "fal", "custom-http-image":
+		return strings.TrimSpace(value), nil
+	case "custom":
+		return "custom-http-image", nil
+	default:
+		return "", fmt.Errorf("provider profile type must be openai, fal, or custom-http-image")
+	}
+}
+
+func normalizeProviderProfileConfig(value json.RawMessage) (json.RawMessage, error) {
+	if len(value) == 0 || strings.TrimSpace(string(value)) == "" {
+		return json.RawMessage(`{}`), nil
+	}
+	var decoded any
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return nil, errors.New("provider_config must be valid JSON.")
+	}
+	if decoded == nil {
+		return json.RawMessage(`{}`), nil
+	}
+	if _, ok := decoded.(map[string]any); !ok {
+		return nil, errors.New("provider_config must be a JSON object.")
+	}
+	return value, nil
+}
+
+func normalizeProviderProfileAPIMode(value string) (string, error) {
+	switch strings.TrimSpace(value) {
+	case "":
+		return "images", nil
+	case "images", "responses":
+		return strings.TrimSpace(value), nil
+	default:
+		return "", fmt.Errorf("provider profile api_mode must be images or responses")
+	}
 }
 
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
@@ -790,6 +1403,24 @@ func firstFormValue(values map[string][]string, key string) string {
 		return ""
 	}
 	return values[key][0]
+}
+
+func queryLimit(r *http.Request, fallback int, max int) int {
+	value := strings.TrimSpace(r.URL.Query().Get("limit"))
+	if value == "" {
+		return fallback
+	}
+	limit, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	if limit <= 0 {
+		return fallback
+	}
+	if limit > max {
+		return max
+	}
+	return limit
 }
 
 func (s *Server) applyProviderProfile(ctx context.Context, options *relayOptions) error {

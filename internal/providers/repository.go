@@ -3,19 +3,23 @@ package providers
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
 )
 
 type Profile struct {
-	ID         int64      `json:"id"`
-	Name       string     `json:"name"`
-	Type       string     `json:"type"`
-	BaseURL    string     `json:"base_url"`
-	APIKeyHint string     `json:"api_key_hint"`
-	CreatedAt  time.Time  `json:"created_at"`
-	DeletedAt  *time.Time `json:"deleted_at,omitempty"`
+	ID         int64           `json:"id"`
+	Name       string          `json:"name"`
+	Type       string          `json:"type"`
+	BaseURL    string          `json:"base_url"`
+	APIKeyHint string          `json:"api_key_hint"`
+	Model      string          `json:"model,omitempty"`
+	APIMode    string          `json:"api_mode"`
+	Config     json.RawMessage `json:"provider_config_json,omitempty"`
+	CreatedAt  time.Time       `json:"created_at"`
+	DeletedAt  *time.Time      `json:"deleted_at,omitempty"`
 }
 
 type Repository struct {
@@ -28,7 +32,7 @@ func NewRepository(db *sql.DB) *Repository {
 
 func (r *Repository) List(ctx context.Context, ownerHash string) ([]Profile, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, name, type, base_url, COALESCE(api_key_hint, ''), created_at, deleted_at
+		SELECT id, name, type, base_url, COALESCE(api_key_hint, ''), COALESCE(default_model, ''), COALESCE(api_mode, 'images'), COALESCE(provider_config_json, '{}'::jsonb), created_at, deleted_at
 		FROM provider_profiles
 		WHERE user_id IS NULL AND anonymous_token_hash = $1 AND deleted_at IS NULL
 		ORDER BY created_at DESC
@@ -41,7 +45,7 @@ func (r *Repository) List(ctx context.Context, ownerHash string) ([]Profile, err
 	var list []Profile
 	for rows.Next() {
 		var profile Profile
-		if err := rows.Scan(&profile.ID, &profile.Name, &profile.Type, &profile.BaseURL, &profile.APIKeyHint, &profile.CreatedAt, &profile.DeletedAt); err != nil {
+		if err := rows.Scan(&profile.ID, &profile.Name, &profile.Type, &profile.BaseURL, &profile.APIKeyHint, &profile.Model, &profile.APIMode, &profile.Config, &profile.CreatedAt, &profile.DeletedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, profile)
@@ -49,18 +53,58 @@ func (r *Repository) List(ctx context.Context, ownerHash string) ([]Profile, err
 	return list, rows.Err()
 }
 
-func (r *Repository) Create(ctx context.Context, ownerHash string, name string, profileType string, baseURL string, apiKey string) (*Profile, error) {
+func (r *Repository) Create(ctx context.Context, ownerHash string, name string, profileType string, baseURL string, apiKey string, model string, apiMode string, providerConfig json.RawMessage) (*Profile, error) {
 	if strings.TrimSpace(profileType) == "" {
-		profileType = "custom"
+		profileType = "openai"
 	}
+	if strings.TrimSpace(apiMode) == "" {
+		apiMode = "images"
+	}
+	providerConfig = normalizeProviderConfig(providerConfig)
 	var profile Profile
 	err := r.db.QueryRowContext(ctx, `
-		INSERT INTO provider_profiles (anonymous_token_hash, name, type, base_url, api_key_plaintext, api_key_hint)
-		VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6)
-		RETURNING id, name, type, base_url, COALESCE(api_key_hint, ''), created_at, deleted_at
-	`, ownerHash, name, profileType, baseURL, apiKey, keyHint(apiKey)).Scan(
-		&profile.ID, &profile.Name, &profile.Type, &profile.BaseURL, &profile.APIKeyHint, &profile.CreatedAt, &profile.DeletedAt,
+		INSERT INTO provider_profiles (anonymous_token_hash, name, type, base_url, api_key_plaintext, api_key_hint, default_model, api_mode, provider_config_json)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, NULLIF($7, ''), $8, $9::jsonb)
+		RETURNING id, name, type, base_url, COALESCE(api_key_hint, ''), COALESCE(default_model, ''), COALESCE(api_mode, 'images'), COALESCE(provider_config_json, '{}'::jsonb), created_at, deleted_at
+	`, ownerHash, name, profileType, baseURL, apiKey, keyHint(apiKey), strings.TrimSpace(model), strings.TrimSpace(apiMode), providerConfig).Scan(
+		&profile.ID, &profile.Name, &profile.Type, &profile.BaseURL, &profile.APIKeyHint, &profile.Model, &profile.APIMode, &profile.Config, &profile.CreatedAt, &profile.DeletedAt,
 	)
+	if err != nil {
+		return nil, err
+	}
+	return &profile, nil
+}
+
+func (r *Repository) Update(ctx context.Context, ownerHash string, id int64, name *string, profileType *string, baseURL *string, apiKey *string, model *string, apiMode *string, providerConfig *json.RawMessage) (*Profile, error) {
+	var keyValue any
+	var keyHintValue any
+	updateKey := apiKey != nil
+	if updateKey {
+		trimmed := strings.TrimSpace(*apiKey)
+		keyValue = trimmed
+		keyHintValue = keyHint(trimmed)
+	}
+
+	var profile Profile
+	err := r.db.QueryRowContext(ctx, `
+		UPDATE provider_profiles
+		SET
+			name = COALESCE($3, name),
+			type = COALESCE($4, type),
+			base_url = COALESCE($5, base_url),
+			api_key_plaintext = CASE WHEN $6 THEN NULLIF($7, '') ELSE api_key_plaintext END,
+			api_key_hint = CASE WHEN $6 THEN $8 ELSE api_key_hint END,
+			default_model = CASE WHEN $9 THEN NULLIF($10, '') ELSE default_model END,
+			api_mode = COALESCE($11, api_mode),
+			provider_config_json = CASE WHEN $12 THEN $13::jsonb ELSE provider_config_json END
+		WHERE id = $1 AND user_id IS NULL AND anonymous_token_hash = $2 AND deleted_at IS NULL
+		RETURNING id, name, type, base_url, COALESCE(api_key_hint, ''), COALESCE(default_model, ''), COALESCE(api_mode, 'images'), COALESCE(provider_config_json, '{}'::jsonb), created_at, deleted_at
+	`, id, ownerHash, optionalStringValue(name), optionalStringValue(profileType), optionalStringValue(baseURL), updateKey, keyValue, keyHintValue, model != nil, optionalStringValue(model), optionalStringValue(apiMode), providerConfig != nil, optionalJSONValue(providerConfig)).Scan(
+		&profile.ID, &profile.Name, &profile.Type, &profile.BaseURL, &profile.APIKeyHint, &profile.Model, &profile.APIMode, &profile.Config, &profile.CreatedAt, &profile.DeletedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -93,6 +137,27 @@ func (r *Repository) GetSecret(ctx context.Context, ownerHash string, id int64) 
 		return "", "", false, err
 	}
 	return baseURL, apiKey, true, nil
+}
+
+func optionalStringValue(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func optionalJSONValue(value *json.RawMessage) any {
+	if value == nil {
+		return nil
+	}
+	return normalizeProviderConfig(*value)
+}
+
+func normalizeProviderConfig(value json.RawMessage) json.RawMessage {
+	if len(value) == 0 || strings.TrimSpace(string(value)) == "" {
+		return json.RawMessage(`{}`)
+	}
+	return value
 }
 
 func keyHint(apiKey string) string {
