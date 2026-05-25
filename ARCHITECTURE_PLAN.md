@@ -1,6 +1,6 @@
 # 架构与产品演进计划
 
-本文档记录 MuseForge 的目标架构、当前已落地能力和后续产品演进方向。项目已经完成从早期单页工具到 Go + React/Vite 模块化单体的迁移，后续重点是补齐分享广场后端、用户体系、社区发布和运营能力。
+本文档记录 MuseForge 的目标架构、当前已落地能力和后续产品演进方向。项目已经完成从早期单页工具到 Go + React/Vite 模块化单体的迁移。下一阶段先把 TokFlux（原 TokenFlux）image2 体验产品化，并把所有模型调用默认收敛到 Go 后端统一转发；分享广场后端、用户体系和社区发布排在模型调用出口稳定之后。
 
 ## 当前形态
 
@@ -30,6 +30,9 @@ Go 后端 -> embed web/dist
 当前尚未具备：
 
 ```text
+TokFlux 一等默认渠道体验
+所有自定义 API 默认经 Go 转发
+后端化 Agent Run 和 Agent 会话持久化
 Go 内置分享广场后端
 登录用户体系
 图库作品发布为社区内容
@@ -93,6 +96,52 @@ go build -buildvcs=false -o museforge.exe ./cmd/server
 ```
 
 MuseForge 可以调用自己的中转站，也可以兼容其他 OpenAI-compatible 中转站。两者不应强耦合。
+
+当前产品策略是 TokFlux-first：
+
+```text
+默认渠道：
+TokFlux image2，默认上游 https://api.tokenflux.cloud/v1。
+
+兼容渠道：
+其他 OpenAI-compatible 图片和 Responses API。
+
+后续渠道：
+自有模型、本地模型、Fal、ComfyUI/工作流引擎等。
+```
+
+无论用户选择默认 TokFlux 还是自定义 API，默认请求路径都应是：
+
+```text
+浏览器 -> MuseForge Go -> 上游模型服务
+```
+
+浏览器直连外部 API 仅保留为高级调试能力，不作为默认产品路径。
+
+Agent 当前不是简单聊天代理。现有前端已经实现了一个客户端 Agent Runtime：
+
+```text
+Responses gpt-5.5：
+负责理解用户意图，并可调用内置 image_generation 工具。
+
+MuseForge 前端 Runtime：
+负责注入图片引用上下文、声明 image_generation/web_search/function tools、
+处理 generate_image_batch 和 continue_generation、
+解析流式 partial image、把 image_generation_call 结果落为本地任务和图库图片。
+```
+
+因此 Agent 后端化不是把能力降级为“纯转发 Responses”，而是逐步把现有前端 Runtime 迁移到 Go：
+
+```text
+第一步：
+保留现有前端编排，先让所有 Agent HTTP 请求默认经过 Go。
+
+第二步：
+Go 增加 Agent Run，复刻当前多轮 Responses + function_call_output 续跑逻辑。
+
+第三步：
+Agent 生成图片、批量子任务、引用图和会话状态统一进入服务端 tasks/assets。
+```
 
 ## 核心概念
 
@@ -315,10 +364,14 @@ data/
 下一步建议：
 
 ```text
-阶段 7：实现 MuseForge 自有分享广场后端，兼容当前 /api/v1 协议
-阶段 8：登录用户体系与资产归属
-阶段 9：社区作品流、互动和审核
-阶段 10：官方中转站、积分额度和运营后台
+阶段 7：TokFlux 一等默认渠道，简化 API Key 配置路径
+阶段 8：所有 OpenAI-compatible 图片和 Responses 调用默认经 Go 转发
+阶段 9：服务端渠道配置优先，前端任务只携带 provider_profile_id
+阶段 10：图片生成/编辑默认后端任务化，结果统一进入 assets
+阶段 11：迁移现有前端 Agent Runtime 到 Go，Responses gpt-5.5 先作为默认执行器
+阶段 12：实现 MuseForge 自有分享广场后端，兼容当前 /api/v1 协议
+阶段 13：登录用户体系、社区作品流、互动和审核
+阶段 14：更多自有模型、本地模型、工作流引擎和运营能力
 ```
 
 ## 部署计划
@@ -340,7 +393,7 @@ DATA_DIR=./data
 STORAGE_DRIVER=local
 WORKER_CONCURRENCY=2
 MAX_UPLOAD_MB=64
-OPENAI_BASE_URL=你的中转站地址，可为空
+OPENAI_BASE_URL=https://api.tokenflux.cloud/v1，可用其他 OpenAI-compatible 地址覆盖
 OPENAI_API_KEY=默认 API Key，可为空
 VITE_SQUARE_API_URL=远端分享广场服务地址，可为空，需在前端构建前设置
 ```
