@@ -283,10 +283,10 @@ func (r *Repository) RecoverRunning(ctx context.Context) error {
 func (r *Repository) CreateAsset(ctx context.Context, asset Asset) error {
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO assets (
-			id, task_id, project_id, kind, storage_key, public_url, mime, width, height, size_bytes, sha256, visibility
+			id, task_id, project_id, kind, storage_key, public_url, mime, width, height, size_bytes, sha256, visibility, metadata_json
 		)
-		VALUES ($1, $2, NULLIF($3, ''), COALESCE(NULLIF($4, ''), 'output'), $5, $6, $7, NULLIF($8, 0), NULLIF($9, 0), $10, $11, COALESCE(NULLIF($12, ''), 'private'))
-	`, asset.ID, asset.TaskID, asset.ProjectID, asset.Kind, asset.StorageKey, asset.PublicURL, asset.MIME, asset.Width, asset.Height, asset.SizeBytes, asset.SHA256, asset.Visibility)
+		VALUES ($1, $2, NULLIF($3, ''), COALESCE(NULLIF($4, ''), 'output'), $5, $6, $7, NULLIF($8, 0), NULLIF($9, 0), $10, $11, COALESCE(NULLIF($12, ''), 'private'), $13::jsonb)
+	`, asset.ID, asset.TaskID, asset.ProjectID, asset.Kind, asset.StorageKey, asset.PublicURL, asset.MIME, asset.Width, asset.Height, asset.SizeBytes, asset.SHA256, asset.Visibility, assetMetadataValue(asset.Metadata))
 	return err
 }
 
@@ -294,7 +294,7 @@ func (r *Repository) ListAssetsByTask(ctx context.Context, clientHash string, ta
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT a.id, a.task_id, COALESCE(a.project_id, ''), COALESCE(a.kind, 'output'), t.type, t.prompt, a.storage_key, a.public_url, a.mime,
 			COALESCE(a.width, 0), COALESCE(a.height, 0), a.size_bytes, a.sha256,
-			COALESCE(a.visibility, 'private'), a.created_at
+			COALESCE(a.visibility, 'private'), COALESCE(a.metadata_json, '{}'::jsonb), a.created_at
 		FROM assets a
 		JOIN tasks t ON t.id = a.task_id
 		WHERE a.task_id = $1 AND t.anonymous_token_hash = $2 AND a.deleted_at IS NULL
@@ -351,7 +351,7 @@ func (r *Repository) ListAssetsFilteredPage(ctx context.Context, clientHash stri
 	query := fmt.Sprintf(`
 		SELECT a.id, a.task_id, COALESCE(a.project_id, ''), COALESCE(a.kind, 'output'), t.type, t.prompt, a.storage_key, a.public_url, a.mime,
 			COALESCE(a.width, 0), COALESCE(a.height, 0), a.size_bytes, a.sha256,
-			COALESCE(a.visibility, 'private'), a.created_at
+			COALESCE(a.visibility, 'private'), COALESCE(a.metadata_json, '{}'::jsonb), a.created_at
 		FROM assets a
 		JOIN tasks t ON t.id = a.task_id
 		WHERE %s
@@ -386,11 +386,11 @@ func (r *Repository) GetAsset(ctx context.Context, clientHash string, id string)
 	err := r.db.QueryRowContext(ctx, `
 		SELECT a.id, a.task_id, COALESCE(a.project_id, ''), COALESCE(a.kind, 'output'), t.type, t.prompt, a.storage_key, a.public_url, a.mime,
 			COALESCE(a.width, 0), COALESCE(a.height, 0), a.size_bytes, a.sha256,
-			COALESCE(a.visibility, 'private'), a.created_at
+			COALESCE(a.visibility, 'private'), COALESCE(a.metadata_json, '{}'::jsonb), a.created_at
 		FROM assets a
 		JOIN tasks t ON t.id = a.task_id
 		WHERE a.id = $1 AND t.anonymous_token_hash = $2 AND a.deleted_at IS NULL
-	`, id, clientHash).Scan(&asset.ID, &asset.TaskID, &asset.ProjectID, &asset.Kind, &asset.TaskType, &asset.Prompt, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.Visibility, &asset.CreatedAt)
+	`, id, clientHash).Scan(&asset.ID, &asset.TaskID, &asset.ProjectID, &asset.Kind, &asset.TaskType, &asset.Prompt, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.Visibility, &asset.Metadata, &asset.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -411,12 +411,12 @@ func (r *Repository) DeleteAsset(ctx context.Context, clientHash string, id stri
 	err = tx.QueryRowContext(ctx, `
 		SELECT a.id, a.task_id, COALESCE(a.project_id, ''), COALESCE(a.kind, 'output'), t.type, t.prompt, a.storage_key, a.public_url, a.mime,
 			COALESCE(a.width, 0), COALESCE(a.height, 0), a.size_bytes, a.sha256,
-			COALESCE(a.visibility, 'private'), a.created_at
+			COALESCE(a.visibility, 'private'), COALESCE(a.metadata_json, '{}'::jsonb), a.created_at
 		FROM assets a
 		JOIN tasks t ON t.id = a.task_id
 		WHERE a.id = $1 AND t.anonymous_token_hash = $2 AND a.deleted_at IS NULL
 		FOR UPDATE
-	`, id, clientHash).Scan(&asset.ID, &asset.TaskID, &asset.ProjectID, &asset.Kind, &asset.TaskType, &asset.Prompt, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.Visibility, &asset.CreatedAt)
+	`, id, clientHash).Scan(&asset.ID, &asset.TaskID, &asset.ProjectID, &asset.Kind, &asset.TaskType, &asset.Prompt, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.Visibility, &asset.Metadata, &asset.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -440,7 +440,7 @@ func (r *Repository) DeleteAssetsOlderThan(ctx context.Context, before time.Time
 		WITH doomed AS (
 			SELECT id, task_id, COALESCE(project_id, '') AS project_id, COALESCE(kind, 'output') AS kind, storage_key, public_url, mime,
 				COALESCE(width, 0) AS width, COALESCE(height, 0) AS height,
-				size_bytes, sha256, COALESCE(visibility, 'private') AS visibility, created_at
+				size_bytes, sha256, COALESCE(visibility, 'private') AS visibility, COALESCE(metadata_json, '{}'::jsonb) AS metadata_json, created_at
 			FROM assets
 			WHERE created_at < $1
 			ORDER BY created_at
@@ -451,9 +451,9 @@ func (r *Repository) DeleteAssetsOlderThan(ctx context.Context, before time.Time
 			USING doomed d
 			WHERE a.id = d.id
 			RETURNING d.id, d.task_id, d.project_id, d.kind, d.storage_key, d.public_url, d.mime,
-				d.width, d.height, d.size_bytes, d.sha256, d.visibility, d.created_at
+				d.width, d.height, d.size_bytes, d.sha256, d.visibility, d.metadata_json, d.created_at
 		)
-		SELECT id, task_id, project_id, kind, storage_key, public_url, mime, width, height, size_bytes, sha256, visibility, created_at
+		SELECT id, task_id, project_id, kind, storage_key, public_url, mime, width, height, size_bytes, sha256, visibility, metadata_json, created_at
 		FROM deleted
 	`, before, limit)
 	if err != nil {
@@ -464,7 +464,7 @@ func (r *Repository) DeleteAssetsOlderThan(ctx context.Context, before time.Time
 	var list []Asset
 	for rows.Next() {
 		var asset Asset
-		if err := rows.Scan(&asset.ID, &asset.TaskID, &asset.ProjectID, &asset.Kind, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.Visibility, &asset.CreatedAt); err != nil {
+		if err := rows.Scan(&asset.ID, &asset.TaskID, &asset.ProjectID, &asset.Kind, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.Visibility, &asset.Metadata, &asset.CreatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, asset)
@@ -486,7 +486,7 @@ func scanAssets(rows *sql.Rows) ([]Asset, error) {
 	var list []Asset
 	for rows.Next() {
 		var asset Asset
-		if err := rows.Scan(&asset.ID, &asset.TaskID, &asset.ProjectID, &asset.Kind, &asset.TaskType, &asset.Prompt, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.Visibility, &asset.CreatedAt); err != nil {
+		if err := rows.Scan(&asset.ID, &asset.TaskID, &asset.ProjectID, &asset.Kind, &asset.TaskType, &asset.Prompt, &asset.StorageKey, &asset.PublicURL, &asset.MIME, &asset.Width, &asset.Height, &asset.SizeBytes, &asset.SHA256, &asset.Visibility, &asset.Metadata, &asset.CreatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, asset)
@@ -513,6 +513,13 @@ func nullString(value string) any {
 		return nil
 	}
 	return value
+}
+
+func assetMetadataValue(value json.RawMessage) string {
+	if len(value) == 0 || strings.TrimSpace(string(value)) == "" {
+		return "{}"
+	}
+	return string(value)
 }
 
 type TaskWork struct {

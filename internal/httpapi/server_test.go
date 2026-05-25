@@ -337,3 +337,21 @@ func TestV1AssetDTODefaultsVisibilityToPrivate(t *testing.T) {
 		t.Fatalf("visibility = %q, want private", visibility)
 	}
 }
+
+func TestV1AssetDTOIncludesMetadata(t *testing.T) {
+	dto := v1AssetDTO(map[string]any{
+		"id":            "asset-1",
+		"task_id":       "task-1",
+		"public_url":    "/files/result.png",
+		"mime":          "image/png",
+		"metadata_json": map[string]any{"revised_prompt": "rewritten prompt"},
+	})
+
+	metadata, _ := dto["metadata"].(map[string]any)
+	if metadata == nil {
+		t.Fatalf("expected metadata object, got %T", dto["metadata"])
+	}
+	if revisedPrompt, _ := metadata["revised_prompt"].(string); revisedPrompt != "rewritten prompt" {
+		t.Fatalf("revised_prompt = %q, want rewritten prompt", revisedPrompt)
+	}
+}

@@ -128,6 +128,23 @@ export function getTaskOutputAssets(task: CreativeTaskDTO): AssetDTO[] {
   return Array.isArray(task.assets) ? task.assets : []
 }
 
+export function getAssetRevisedPrompt(asset: AssetDTO): string | undefined {
+  const metadata = asset.metadata
+  if (!metadata || typeof metadata !== 'object') return undefined
+  const revisedPrompt = metadata.revisedPrompt ?? metadata.revised_prompt
+  return typeof revisedPrompt === 'string' && revisedPrompt.trim() ? revisedPrompt : undefined
+}
+
+function mapRevisedPromptsByImage(outputImageIds: string[] | undefined, outputAssets: AssetDTO[]) {
+  if (!outputImageIds?.length) return undefined
+  return outputAssets.reduce<Record<string, string>>((acc, asset, index) => {
+    const imageId = outputImageIds[index]
+    const revisedPrompt = getAssetRevisedPrompt(asset)
+    if (imageId && revisedPrompt) acc[imageId] = revisedPrompt
+    return acc
+  }, {})
+}
+
 export function getTaskCreatedAt(task: CreativeTaskDTO): number {
   const value = task.createdAt ?? task.created_at
   const timestamp = value ? Date.parse(value) : NaN
@@ -148,6 +165,7 @@ export function backendTaskToTaskRecord(task: CreativeTaskDTO, options: {
   const completedAt = getTaskCompletedAt(task)
   const params = { ...DEFAULT_PARAMS, ...serverTaskParams(task) }
   const outputAssets = getTaskOutputAssets(task)
+  const revisedPromptByImage = mapRevisedPromptsByImage(options.outputImageIds, outputAssets)
   return {
     id: task.id,
     serverTaskId: task.id,
@@ -168,6 +186,7 @@ export function backendTaskToTaskRecord(task: CreativeTaskDTO, options: {
     outputImages: options.outputImageIds ?? [],
     serverOutputAssetIds: outputAssets.map((asset) => asset.id).filter(Boolean),
     rawImageUrls: outputAssets.map(getAssetPublicUrl).filter(Boolean),
+    revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
     status: mapServerTaskStatus(task.status),
     error: task.error ?? task.lastError ?? task.last_error ?? null,
     lastError: task.lastError ?? task.last_error ?? null,

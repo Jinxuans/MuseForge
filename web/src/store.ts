@@ -53,7 +53,7 @@ import { callImageApi } from './lib/api'
 import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage, type BatchImageCallResult } from './lib/agentApi'
 import { getBackendCapabilities } from './lib/backendCapabilities'
 import { BackendApiError } from './lib/backendClient'
-import { backendTaskToTaskRecord, cancelBackendTask, createBackendEditTask, createBackendGenerationTask, getBackendTask, getTaskOutputAssets, listBackendTasksPage, mapServerTaskStatus, serverTaskParams, type CreativeTaskDTO } from './lib/backendTasks'
+import { backendTaskToTaskRecord, cancelBackendTask, createBackendEditTask, createBackendGenerationTask, getAssetRevisedPrompt, getBackendTask, getTaskOutputAssets, listBackendTasksPage, mapServerTaskStatus, serverTaskParams, type CreativeTaskDTO } from './lib/backendTasks'
 import { backendAssetToStoredServerAsset, clearCachedServerAssets, deleteCachedServerAsset, fetchBackendAssetAsDataUrl, getAssetPublicUrl, listBackendAssetsPage, type ListAssetsInput } from './lib/backendAssets'
 import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId, replaceAgentPromptImageReferencesForApi } from './lib/agentImageReferences'
 import { IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
@@ -4135,7 +4135,10 @@ async function executeAgentRound(
 
 async function getBackendCapabilitiesCached() {
   if (!backendCapabilitiesPromise) {
-    backendCapabilitiesPromise = getBackendCapabilities().catch(() => null)
+    backendCapabilitiesPromise = getBackendCapabilities().catch(() => {
+      backendCapabilitiesPromise = null
+      return null
+    })
   }
   return backendCapabilitiesPromise
 }
@@ -4175,32 +4178,51 @@ function getServerTaskStatusPatch(serverTask: CreativeTaskDTO): Partial<TaskReco
 
 async function saveBackendTaskOutputs(taskId: string, task: TaskRecord, serverTask: Awaited<ReturnType<typeof getBackendTask>>) {
   const outputAssets = getTaskOutputAssets(serverTask)
-  const outputIds: string[] = []
-  for (const asset of outputAssets) {
-    const url = getAssetPublicUrl(asset)
-    if (!url) continue
-    const dataUrl = await fetchBackendAssetAsDataUrl(asset)
-    const imageId = await storeImage(dataUrl, 'generated')
-    cacheImage(imageId, dataUrl)
-    outputIds.push(imageId)
-  }
+  const serverOutputAssetIds = outputAssets.map((asset) => asset.id).filter(Boolean)
+  const rawImageUrls = outputAssets.map(getAssetPublicUrl).filter(Boolean)
   const actualParams = serverTaskParams(serverTask)
   const serverStatus = mapServerTaskStatus(serverTask.status)
-  updateTaskInStore(taskId, {
+  const basePatch: Partial<TaskRecord> = {
     serverTaskId: serverTask.id,
     serverTaskStatus: serverTask.status,
-    outputImages: outputIds,
+    serverOutputAssetIds,
+    rawImageUrls: rawImageUrls.length ? rawImageUrls : undefined,
     status: serverStatus,
     error: serverStatus === 'done' ? null : getServerTaskErrorMessage(serverTask),
     lastError: serverTask.lastError ?? serverTask.last_error ?? null,
     actualParams,
+    finishedAt: serverStatus === 'done' ? Date.now() : task.finishedAt ?? null,
+    elapsed: serverStatus === 'done' ? Date.now() - task.createdAt : task.elapsed,
+    streamPartialImageIds: undefined,
+  }
+  updateTaskInStore(taskId, basePatch)
+
+  const outputIds: string[] = []
+  const revisedPromptByImage: Record<string, string> = {}
+  for (const asset of outputAssets) {
+    const url = getAssetPublicUrl(asset)
+    if (!url) continue
+    try {
+      const dataUrl = await fetchBackendAssetAsDataUrl(asset)
+      const imageId = await storeImage(dataUrl, 'generated')
+      cacheImage(imageId, dataUrl)
+      outputIds.push(imageId)
+      const revisedPrompt = getAssetRevisedPrompt(asset)
+      if (revisedPrompt) revisedPromptByImage[imageId] = revisedPrompt
+      await putServerAsset(backendAssetToStoredServerAsset(asset, imageId))
+    } catch {
+      await putServerAsset(backendAssetToStoredServerAsset(asset, null))
+    }
+  }
+
+  if (!outputIds.length) return { outputIds }
+  updateTaskInStore(taskId, {
+    outputImages: outputIds,
     actualParamsByImage: outputIds.reduce<Record<string, Partial<TaskParams>>>((acc, imgId) => {
       acc[imgId] = actualParams
       return acc
     }, {}),
-    finishedAt: serverStatus === 'done' ? Date.now() : task.finishedAt ?? null,
-    elapsed: serverStatus === 'done' ? Date.now() - task.createdAt : task.elapsed,
-    streamPartialImageIds: undefined,
+    revisedPromptByImage: Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
   })
   return { outputIds }
 }
@@ -4255,7 +4277,8 @@ async function executeBackendTask(taskId: string, task: TaskRecord, profile: Api
   }
 
   const { outputIds } = await saveBackendTaskOutputs(taskId, task, latest)
-  useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
+  const outputCount = outputIds.length || getTaskOutputAssets(latest).length
+  useStore.getState().showToast(`生成完成，共 ${outputCount} 张图片`, 'success')
 }
 
 async function executeTask(taskId: string) {

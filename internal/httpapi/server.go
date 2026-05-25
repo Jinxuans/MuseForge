@@ -344,6 +344,10 @@ func v1TaskDTO(task map[string]any) map[string]any {
 }
 
 func v1AssetDTO(asset map[string]any) map[string]any {
+	metadata := objectValue(asset["metadata"])
+	if len(metadata) == 0 {
+		metadata = objectValue(asset["metadata_json"])
+	}
 	return map[string]any{
 		"id":           asset["id"],
 		"taskId":       asset["task_id"],
@@ -360,7 +364,7 @@ func v1AssetDTO(asset map[string]any) map[string]any {
 		"sizeBytes":    numberValue(asset["size_bytes"]),
 		"sha256":       asset["sha256"],
 		"visibility":   stringValueDefault(asset["visibility"], "private"),
-		"metadata":     map[string]any{},
+		"metadata":     metadata,
 		"createdAt":    asset["created_at"],
 	}
 }

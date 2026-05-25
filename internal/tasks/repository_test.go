@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -78,6 +79,46 @@ func TestNormalizeLimit(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := normalizeLimit(tt.value, tt.fallback, tt.max); got != tt.want {
 				t.Fatalf("normalizeLimit(%d, %d, %d) = %d, want %d", tt.value, tt.fallback, tt.max, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAssetMetadataForImage(t *testing.T) {
+	metadata := assetMetadataForImage("  rewritten prompt  ")
+	var decoded map[string]string
+	if err := json.Unmarshal(metadata, &decoded); err != nil {
+		t.Fatalf("decode metadata: %v", err)
+	}
+	if decoded["revised_prompt"] != "rewritten prompt" {
+		t.Fatalf("revised_prompt = %q, want rewritten prompt", decoded["revised_prompt"])
+	}
+	if metadata := assetMetadataForImage(" "); metadata != nil {
+		t.Fatalf("blank revised prompt metadata = %s, want nil", string(metadata))
+	}
+}
+
+func TestRequestedImageCount(t *testing.T) {
+	tests := []struct {
+		name string
+		n    any
+		want int
+	}{
+		{name: "missing", want: 1},
+		{name: "zero", n: 0, want: 1},
+		{name: "float from json", n: float64(2), want: 2},
+		{name: "json number", n: json.Number("3"), want: 3},
+		{name: "clamped", n: 99, want: 10},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := map[string]any{}
+			if tt.n != nil {
+				params["n"] = tt.n
+			}
+			if got := requestedImageCount(params); got != tt.want {
+				t.Fatalf("requestedImageCount(%v) = %d, want %d", tt.n, got, tt.want)
 			}
 		})
 	}

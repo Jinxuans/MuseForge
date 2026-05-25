@@ -21,7 +21,14 @@ describe('backend task mapping', () => {
       model: 'gpt-image-2',
       params: { size: '1024x1024' },
       outputAssets: [
-        { id: 'asset_1', mime: 'image/png', publicUrl: '/files/results/task_1/0.png', sizeBytes: 1, sha256: 'abc' },
+        {
+          id: 'asset_1',
+          mime: 'image/png',
+          publicUrl: '/files/results/task_1/0.png',
+          sizeBytes: 1,
+          sha256: 'abc',
+          metadata: { revised_prompt: 'rewritten prompt' },
+        },
       ],
       assets: [
         { id: 'asset_legacy', mime: 'image/png', publicUrl: '/files/results/task_1/legacy.png', sizeBytes: 1, sha256: 'def' },
@@ -43,6 +50,7 @@ describe('backend task mapping', () => {
     expect(mapped.params.size).toBe('1024x1024')
     expect(mapped.params.quality).toBe(DEFAULT_PARAMS.quality)
     expect(mapped.rawImageUrls).toEqual(['/files/results/task_1/0.png'])
+    expect(mapped.revisedPromptByImage).toEqual({ img_1: 'rewritten prompt' })
     expect(mapped.finishedAt).toBeGreaterThan(mapped.createdAt)
     expect(mapped.serverTaskId).toBe('task_1')
   })

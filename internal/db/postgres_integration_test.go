@@ -100,6 +100,7 @@ func TestPostgresIntegrationMigrationsAndRepositories(t *testing.T) {
 		SizeBytes:  12,
 		SHA256:     "sha256",
 		Visibility: "private",
+		Metadata:   json.RawMessage(`{"revised_prompt":"rewritten prompt"}`),
 	}
 	if err := taskRepo.CreateAsset(ctx, asset); err != nil {
 		t.Fatalf("create asset: %v", err)
@@ -110,6 +111,13 @@ func TestPostgresIntegrationMigrationsAndRepositories(t *testing.T) {
 	}
 	if len(assetsA) != 1 || assetsA[0].ID != asset.ID {
 		t.Fatalf("client A assets = %#v, want created asset", assetsA)
+	}
+	var assetMetadata map[string]string
+	if err := json.Unmarshal(assetsA[0].Metadata, &assetMetadata); err != nil {
+		t.Fatalf("decode asset metadata: %v", err)
+	}
+	if assetMetadata["revised_prompt"] != "rewritten prompt" {
+		t.Fatalf("revised_prompt = %q, want rewritten prompt", assetMetadata["revised_prompt"])
 	}
 	assetB, err := taskRepo.GetAsset(ctx, clientB, asset.ID)
 	if err != nil {

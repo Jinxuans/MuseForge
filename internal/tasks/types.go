@@ -37,22 +37,23 @@ type Task struct {
 }
 
 type Asset struct {
-	ID         string     `json:"id"`
-	TaskID     string     `json:"task_id"`
-	ProjectID  string     `json:"project_id,omitempty"`
-	Kind       string     `json:"kind"`
-	TaskType   string     `json:"task_type,omitempty"`
-	Prompt     string     `json:"prompt,omitempty"`
-	StorageKey string     `json:"storage_key"`
-	PublicURL  string     `json:"public_url"`
-	MIME       string     `json:"mime"`
-	Width      int        `json:"width,omitempty"`
-	Height     int        `json:"height,omitempty"`
-	SizeBytes  int64      `json:"size_bytes"`
-	SHA256     string     `json:"sha256"`
-	Visibility string     `json:"visibility"`
-	CreatedAt  time.Time  `json:"created_at"`
-	DeletedAt  *time.Time `json:"deleted_at,omitempty"`
+	ID         string          `json:"id"`
+	TaskID     string          `json:"task_id"`
+	ProjectID  string          `json:"project_id,omitempty"`
+	Kind       string          `json:"kind"`
+	TaskType   string          `json:"task_type,omitempty"`
+	Prompt     string          `json:"prompt,omitempty"`
+	StorageKey string          `json:"storage_key"`
+	PublicURL  string          `json:"public_url"`
+	MIME       string          `json:"mime"`
+	Width      int             `json:"width,omitempty"`
+	Height     int             `json:"height,omitempty"`
+	SizeBytes  int64           `json:"size_bytes"`
+	SHA256     string          `json:"sha256"`
+	Visibility string          `json:"visibility"`
+	Metadata   json.RawMessage `json:"metadata_json,omitempty"`
+	CreatedAt  time.Time       `json:"created_at"`
+	DeletedAt  *time.Time      `json:"deleted_at,omitempty"`
 }
 
 type CreateGenerationTask struct {
