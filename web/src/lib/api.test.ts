@@ -363,7 +363,7 @@ describe('callImageApi', () => {
     })
   })
 
-  it('uses the same-origin API proxy path when API proxy is enabled', async () => {
+  it('uses the Go same-origin relay path by default even when the dev API proxy is enabled', async () => {
     vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'true')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       data: [{ b64_json: 'aW1hZ2U=' }],
@@ -385,12 +385,20 @@ describe('callImageApi', () => {
     })
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api-proxy/images/generations',
+      '/v1/images/generations',
       expect.objectContaining({ method: 'POST' }),
     )
+    const [, init] = fetchMock.mock.calls[0]
+    const headers = (init as RequestInit).headers as Record<string, string>
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(headers).not.toHaveProperty('Authorization')
+    expect(body).toMatchObject({
+      __upstream_base_url: 'http://api.example.com/v1',
+      __api_key: 'test-key',
+    })
   })
 
-  it('uses the same-origin API proxy path when API proxy is locked', async () => {
+  it('uses the Go same-origin relay path by default even when the dev API proxy is locked', async () => {
     vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'true')
     vi.stubEnv('VITE_API_PROXY_LOCKED', 'true')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
@@ -413,7 +421,7 @@ describe('callImageApi', () => {
     })
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api-proxy/images/generations',
+      '/v1/images/generations',
       expect.objectContaining({ method: 'POST' }),
     )
   })
@@ -440,7 +448,7 @@ describe('callImageApi', () => {
     expect((init as RequestInit).cache).toBe('no-store')
   })
 
-  it('omits Authorization when the active profile has no API key', async () => {
+  it('omits Authorization on the Go same-origin relay and forwards custom credentials in the body', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       data: [{ b64_json: 'aW1hZ2U=' }],
     }), {
@@ -449,7 +457,7 @@ describe('callImageApi', () => {
     }))
 
     await callImageApi({
-      settings: { ...DEFAULT_SETTINGS, apiKey: '' },
+      settings: { ...DEFAULT_SETTINGS, baseUrl: 'https://custom.example.com/v1', apiKey: 'test-key' },
       prompt: 'prompt',
       params: { ...DEFAULT_PARAMS },
       inputImageDataUrls: [],
@@ -457,10 +465,15 @@ describe('callImageApi', () => {
 
     const [, init] = fetchMock.mock.calls[0]
     const headers = (init as RequestInit).headers as Record<string, string>
+    const body = JSON.parse(String((init as RequestInit).body))
     expect(headers).not.toHaveProperty('Authorization')
+    expect(body).toMatchObject({
+      __upstream_base_url: 'https://custom.example.com/v1',
+      __api_key: 'test-key',
+    })
   })
 
-  it('ignores stored API proxy settings when the current deployment has no proxy', async () => {
+  it('uses browser direct access only when the debugging switch is enabled', async () => {
     vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'false')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       data: [{ b64_json: 'aW1hZ2U=' }],
@@ -474,6 +487,7 @@ describe('callImageApi', () => {
         ...DEFAULT_SETTINGS,
         apiKey: 'test-key',
         apiProxy: true,
+        directApiAccess: true,
         baseUrl: 'http://api.example.com/v1',
       },
       prompt: 'prompt',
@@ -485,6 +499,83 @@ describe('callImageApi', () => {
       'http://api.example.com/v1/images/generations',
       expect.objectContaining({ method: 'POST' }),
     )
+    const [, init] = fetchMock.mock.calls[0]
+    const headers = (init as RequestInit).headers as Record<string, string>
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(headers.Authorization).toBe('Bearer test-key')
+    expect(body.__api_key).toBeUndefined()
+  })
+
+  it('routes image edits through the Go same-origin relay and forwards relay options as form fields', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input).startsWith('data:')) return new Response(new Blob(['image'], { type: 'image/png' }))
+      return new Response(JSON.stringify({
+        data: [{ b64_json: 'aW1hZ2U=' }],
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    })
+
+    await callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        baseUrl: 'https://custom.example.com/v1',
+        apiKey: 'test-key',
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: ['data:image/png;base64,aW1hZ2U='],
+    })
+
+    const apiCall = fetchMock.mock.calls.find(([url]) => url === '/v1/images/edits')
+    expect(apiCall).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/images/edits',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    const [, init] = apiCall!
+    const headers = (init as RequestInit).headers as Record<string, string>
+    const body = (init as RequestInit).body as FormData
+    expect(headers).not.toHaveProperty('Authorization')
+    expect(body.get('__upstream_base_url')).toBe('https://custom.example.com/v1')
+    expect(body.get('__api_key')).toBe('test-key')
+  })
+
+  it('sends the anonymous client id when using a saved provider profile through the Go relay', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      data: [{ b64_json: 'aW1hZ2U=' }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        apiKey: '',
+        profiles: DEFAULT_SETTINGS.profiles.map((profile) => ({
+          ...profile,
+          apiKey: '',
+          serverProfileId: '42',
+        })),
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })
+
+    const [, init] = fetchMock.mock.calls[0]
+    const headers = new Headers((init as RequestInit).headers)
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/images/generations',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(headers.get('X-Client-ID')).toBeTruthy()
+    expect(headers.get('Authorization')).toBeNull()
+    expect(body).toMatchObject({ __provider_profile_id: '42' })
+    expect(body.__api_key).toBeUndefined()
   })
 
   it('polls custom async tasks immediately and keeps polling after transient network errors', async () => {

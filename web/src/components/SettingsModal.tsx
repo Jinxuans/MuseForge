@@ -335,7 +335,8 @@ export default function SettingsModal() {
   const apiProxyAvailable = isApiProxyAvailable(apiProxyConfig)
   const apiProxyLocked = isApiProxyLocked(apiProxyConfig)
   const activeProfile = draft.profiles.find((profile) => profile.id === draft.activeProfileId) ?? draft.profiles[0] ?? getActiveApiProfile(draft)
-  const apiProxyChecked = activeProfile.provider === 'openai' && (apiProxyLocked || activeProfile.apiProxy)
+  const directApiAccessEnabled = activeProfile.provider === 'openai' && !!activeProfile.directApiAccess
+  const apiProxyChecked = directApiAccessEnabled && (apiProxyLocked || activeProfile.apiProxy)
   const apiProxyEnabled = apiProxyAvailable && activeProfile.provider === 'openai' && apiProxyChecked
   const activeProviderIsOpenAICompatible = isOpenAICompatibleProvider(draft, activeProfile.provider)
   const activeProviderUsesApiUrl = activeProviderIsOpenAICompatible || activeProfile.provider === 'fal'
@@ -491,11 +492,12 @@ export default function SettingsModal() {
       const defaultModel = profile.provider === 'fal' ? DEFAULT_FAL_MODEL : getDefaultModelForMode(profile.apiMode)
       return {
         ...profile,
-        name: profile.name.trim() || (profile.id === DEFAULT_OPENAI_PROFILE_ID ? '默认' : '新配置'),
+        name: profile.name.trim() || (profile.id === DEFAULT_OPENAI_PROFILE_ID ? 'TokFlux' : '新配置'),
         baseUrl: normalizedBaseUrl,
         model: profile.model.trim() || defaultModel,
         timeout: Number(profile.timeout) || DEFAULT_SETTINGS.timeout,
         apiProxy: profile.provider === 'openai' && apiProxyAvailable ? (apiProxyLocked || profile.apiProxy) : false,
+        directApiAccess: profile.provider === 'openai' ? profile.directApiAccess : false,
         codexCli: profile.provider === 'openai' ? profile.codexCli : false,
         streamImages: profile.provider === 'openai' ? profile.streamImages : false,
         streamPartialImages: profile.provider === 'openai' ? normalizeStreamPartialImages(profile.streamPartialImages) : DEFAULT_STREAM_PARTIAL_IMAGES,
@@ -1629,18 +1631,42 @@ export default function SettingsModal() {
                       <span className="text-yellow-600 dark:text-yellow-500">已开启代理，实际请求目标由部署端决定，此处设置被忽略。</span>
                     ) : activeProfile.provider === 'fal' ? (
                       <span>默认使用 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">{DEFAULT_FAL_BASE_URL}</code>；填写自定义地址时将作为 fal.ai 代理 URL。</span>
+                    ) : activeProfile.directApiAccess ? (
+                      <span>浏览器将直接请求该地址，仅建议调试时开启。</span>
                     ) : (
-                      <span>支持通过查询参数覆盖：<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiUrl=</code></span>
+                      <span>默认由本地 Go <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">/v1</code> 转发到该地址；Network 只会请求当前站点。</span>
                     )}
                   </div>
                 </label>
               )}
 
-              {/* 4. API 代理（紧跟 URL） */}
-              {apiProxyAvailable && activeProfile.provider === 'openai' && (
+              {/* 4. 请求出口 */}
+              {activeProfile.provider === 'openai' && (
                 <div className="block">
                   <div className="mb-1.5 flex items-center justify-between">
-                    <span className="block text-sm text-gray-600 dark:text-gray-300">API 代理</span>
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">浏览器直连调试</span>
+                    <button
+                      type="button"
+                      onClick={() => updateActiveProfile({ directApiAccess: !activeProfile.directApiAccess }, true)}
+                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${directApiAccessEnabled ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                      role="switch"
+                      aria-checked={directApiAccessEnabled}
+                      aria-label="浏览器直连调试"
+                    >
+                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${directApiAccessEnabled ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                    </button>
+                  </div>
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                    默认关闭。关闭时图片生成和编辑由当前 Go 服务的 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">/v1</code> 代理转发；开启后浏览器直接请求 API URL。
+                  </div>
+                </div>
+              )}
+
+              {/* 5. API 代理（仅浏览器直连调试时可用） */}
+              {apiProxyAvailable && activeProfile.provider === 'openai' && directApiAccessEnabled && (
+                <div className="block">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">开发代理</span>
                     <button
                       type="button"
                       onClick={() => {
@@ -1656,12 +1682,12 @@ export default function SettingsModal() {
                     </button>
                   </div>
                   <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    {apiProxyLocked ? '当前部署已锁定 API 代理为开启，API URL 设置会被忽略。' : '当前部署提供同源代理时默认开启，可手动关闭。开启后用于解决浏览器跨域限制，API URL 设置会被忽略。'}
+                    {apiProxyLocked ? '当前部署已锁定开发代理为开启，API URL 设置会被忽略。' : '仅用于浏览器直连调试时解决跨域限制；默认 Go 转发链路不需要开启。'}
                   </div>
                 </div>
               )}
 
-              {/* 5. API Key */}
+              {/* 6. API Key */}
               <div className="block">
                 <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API Key</span>
                 <div className="relative">

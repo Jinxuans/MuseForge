@@ -1,6 +1,7 @@
 import { DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type CustomProviderDefinition, type CustomProviderPollMapping, type CustomProviderResultMapping, type CustomProviderSubmitMapping, type ImageApiResponse, type ImageResponseItem, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from './canvasImage'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
+import { createClientHeaders } from './identity'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
@@ -83,6 +84,40 @@ function normalizeImageApiPayload(value: unknown): ImageApiResponse {
 
 function createRequestHeaders(profile: ApiProfile): Record<string, string> {
   return createAuthorizationHeaders(profile.apiKey)
+}
+
+function createRelayHeaders(): Record<string, string> {
+  return createClientHeaders()
+}
+
+function shouldUseSameOriginRelay(profile: ApiProfile): boolean {
+  return profile.provider === 'openai' && !profile.directApiAccess
+}
+
+function createRelayUrl(path: string): string {
+  return buildApiUrl('', path, null, false)
+}
+
+function appendRelayJsonOptions(body: Record<string, unknown>, profile: ApiProfile): void {
+  if (profile.serverProfileId) {
+    body.__provider_profile_id = profile.serverProfileId
+    return
+  }
+  const baseUrl = profile.baseUrl.trim()
+  const apiKey = profile.apiKey.trim()
+  if (baseUrl) body.__upstream_base_url = baseUrl
+  if (apiKey) body.__api_key = apiKey
+}
+
+function appendRelayFormOptions(formData: FormData, profile: ApiProfile): void {
+  if (profile.serverProfileId) {
+    formData.append('__provider_profile_id', profile.serverProfileId)
+    return
+  }
+  const baseUrl = profile.baseUrl.trim()
+  const apiKey = profile.apiKey.trim()
+  if (baseUrl) formData.append('__upstream_base_url', baseUrl)
+  if (apiKey) formData.append('__api_key', apiKey)
 }
 
 function isEventStreamResponse(response: Response): boolean {
@@ -527,8 +562,9 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
   const isEdit = inputImageDataUrls.length > 0
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
-  const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
-  const requestHeaders = createRequestHeaders(profile)
+  const useSameOriginRelay = shouldUseSameOriginRelay(profile)
+  const useApiProxy = !useSameOriginRelay && shouldUseApiProxy(profile.apiProxy, proxyConfig)
+  const requestHeaders = useSameOriginRelay ? createRelayHeaders() : createRequestHeaders(profile)
   const paths = createOpenAICompatiblePaths(customProvider)
 
   const controller = new AbortController()
@@ -591,7 +627,12 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
         formData.append('mask', maskBlob, 'mask.png')
       }
 
-      response = await fetch(buildApiUrl(profile.baseUrl, paths.editPath, proxyConfig, useApiProxy), {
+      const requestUrl = useSameOriginRelay
+        ? createRelayUrl(paths.editPath)
+        : buildApiUrl(profile.baseUrl, paths.editPath, proxyConfig, useApiProxy)
+      if (useSameOriginRelay) appendRelayFormOptions(formData, profile)
+
+      response = await fetch(requestUrl, {
         method: 'POST',
         headers: requestHeaders,
         cache: 'no-store',
@@ -625,7 +666,12 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
         body.partial_images = getStreamPartialImages(profile)
       }
 
-      response = await fetch(buildApiUrl(profile.baseUrl, paths.generationPath, proxyConfig, useApiProxy), {
+      const requestUrl = useSameOriginRelay
+        ? createRelayUrl(paths.generationPath)
+        : buildApiUrl(profile.baseUrl, paths.generationPath, proxyConfig, useApiProxy)
+      if (useSameOriginRelay) appendRelayJsonOptions(body, profile)
+
+      response = await fetch(requestUrl, {
         method: 'POST',
         headers: {
           ...requestHeaders,
@@ -990,8 +1036,9 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
   const { prompt, params, inputImageDataUrls } = opts
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
-  const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
-  const requestHeaders = createRequestHeaders(profile)
+  const useSameOriginRelay = shouldUseSameOriginRelay(profile)
+  const useApiProxy = !useSameOriginRelay && shouldUseApiProxy(profile.apiProxy, proxyConfig)
+  const requestHeaders = useSameOriginRelay ? createRelayHeaders() : createRequestHeaders(profile)
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
 
@@ -1014,8 +1061,13 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
     if (profile.streamImages) {
       body.stream = true
     }
+    if (useSameOriginRelay) appendRelayJsonOptions(body, profile)
 
-    const response = await fetch(buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy), {
+    const requestUrl = useSameOriginRelay
+      ? createRelayUrl('responses')
+      : buildApiUrl(profile.baseUrl, 'responses', proxyConfig, useApiProxy)
+
+    const response = await fetch(requestUrl, {
       method: 'POST',
       headers: {
         ...requestHeaders,

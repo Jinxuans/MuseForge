@@ -1,8 +1,8 @@
 # MuseForge
 
-MuseForge 是一个开源 AI 创作平台，当前以图片生成和编辑为核心，后续可扩展多模型工作流与视频生成能力。
+MuseForge 是一个开源 AI 创作平台，当前以 TokFlux（原 TokenFlux）image2 图片生成和编辑为默认体验，后续可扩展多模型工作流与视频生成能力。
 
-项目采用 Go + React/Vite 实现，不再依赖 PHP，并适配为由 Go 服务托管前端构建产物和同源 `/v1` 代理转发。
+项目采用 Go + React/Vite 实现，不再依赖 PHP，并适配为由 Go 服务托管前端构建产物和同源 `/v1` 代理转发。普通图片生成和编辑默认只请求当前站点的 `/v1/images/generations`、`/v1/images/edits`，再由 Go 转发到 TokFlux 或你在前端填写的 OpenAI-compatible 上游。
 
 源码层面前后端分离，部署时由 Go 二进制托管前端构建产物。`web/dist` 是本地构建产物，不提交到仓库；运行或编译 Go 服务前需要先执行前端构建：
 
@@ -25,13 +25,13 @@ MuseForge 是一个开源 AI 创作平台，当前以图片生成和编辑为核
 根路径支持通过 URL 预填临时 API 配置：
 
 ```text
-/index.html?apiUrl=https://api.example.com/v1&apiKey=sk-xxx
+/index.html?apiUrl=https://api.tokenflux.cloud/v1&apiKey=sk-xxx
 ```
 
 也可以传入模型、API 模式等参数：
 
 ```text
-/index.html?apiUrl=https://api.example.com/v1&apiKey=sk-xxx&apiMode=responses&model=gpt-5.5
+/index.html?apiUrl=https://api.tokenflux.cloud/v1&apiKey=sk-xxx&apiMode=responses&model=gpt-5.5
 ```
 
 后续架构和产品演进计划见 [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md)。
@@ -122,13 +122,15 @@ go run ./cmd/server
 
 ## 配置
 
-可继续在页面里填写 Base URL 和 API Key，也可以在 `.env` 里配置服务端默认值：
+MuseForge 默认使用 TokFlux 兼容地址 `https://api.tokenflux.cloud/v1` 和图片模型 `gpt-image-2`。可继续在页面里填写 TokFlux 或自定义 OpenAI-compatible 的 Base URL 和 API Key；默认情况下这些请求会交给 Go 同源 `/v1` 代理转发，API Key 不会写入服务端日志。也可以在 `.env` 里配置服务端默认值：
 
 ```powershell
 OPENAI_API_KEY=你的 API Key
-OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_BASE_URL=https://api.tokenflux.cloud/v1
 go run ./cmd/server
 ```
+
+设置页保留“浏览器直连调试”高级开关。只有开启该开关时，浏览器才会直接请求外部 API URL；默认关闭。
 
 异步任务需要 PostgreSQL，可写入 `.env`：
 

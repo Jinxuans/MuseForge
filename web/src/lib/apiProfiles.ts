@@ -16,7 +16,8 @@ import type {
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES } from '../types'
 import { readRuntimeEnv } from './runtimeEnv'
 
-const DEFAULT_BASE_URL = readRuntimeEnv(import.meta.env.VITE_DEFAULT_API_URL) || defaultMuseForgeBaseUrl()
+export const DEFAULT_TOKFLUX_BASE_URL = 'https://api.tokenflux.cloud/v1'
+const DEFAULT_BASE_URL = readRuntimeEnv(import.meta.env.VITE_DEFAULT_API_URL) || DEFAULT_TOKFLUX_BASE_URL
 const DEFAULT_OPENAI_API_PROXY = readRuntimeEnv(import.meta.env.VITE_API_PROXY_AVAILABLE) === 'true'
 export const DEFAULT_IMAGES_MODEL = 'gpt-image-2'
 export const DEFAULT_RESPONSES_MODEL = 'gpt-5.5'
@@ -50,10 +51,6 @@ const DEFAULT_EDIT_FILES: CustomProviderFileMapping[] = [
   { field: 'image[]', source: 'inputImages', array: true },
   { field: 'mask', source: 'mask' },
 ]
-
-function defaultMuseForgeBaseUrl() {
-  return typeof window === 'undefined' ? 'https://api.openai.com/v1' : `${window.location.origin}/v1`
-}
 
 function isSameOriginMuseForgeRelay(baseUrl: string) {
   if (typeof window === 'undefined') return false
@@ -292,7 +289,7 @@ export function normalizeCustomProviderDefinitions(input: unknown): CustomProvid
 export function createDefaultOpenAIProfile(overrides: Partial<ApiProfile> = {}): ApiProfile {
   return {
     id: DEFAULT_OPENAI_PROFILE_ID,
-    name: '默认',
+    name: 'TokFlux',
     provider: 'openai',
     baseUrl: DEFAULT_BASE_URL,
     apiKey: '',
@@ -301,6 +298,7 @@ export function createDefaultOpenAIProfile(overrides: Partial<ApiProfile> = {}):
     apiMode: 'images',
     codexCli: false,
     apiProxy: DEFAULT_OPENAI_API_PROXY,
+    directApiAccess: false,
     streamImages: true,
     streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,
     ...overrides,
@@ -319,6 +317,7 @@ export function createDefaultFalProfile(overrides: Partial<ApiProfile> = {}): Ap
     apiMode: 'images',
     codexCli: false,
     apiProxy: false,
+    directApiAccess: false,
     streamImages: false,
     streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,
     ...overrides,
@@ -334,6 +333,7 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
       apiMode: profile.apiMode,
       codexCli: profile.codexCli,
       apiProxy: profile.apiProxy,
+      directApiAccess: profile.directApiAccess,
       responseFormatB64Json: profile.responseFormatB64Json,
       streamImages: profile.streamImages,
       streamPartialImages: profile.streamPartialImages,
@@ -350,6 +350,7 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
       apiMode: savedDraft?.apiMode ?? 'images',
       codexCli: false,
       apiProxy: false,
+      directApiAccess: false,
       responseFormatB64Json: savedDraft?.responseFormatB64Json,
       streamImages: false,
       streamPartialImages: savedDraft?.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES,
@@ -367,6 +368,7 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
       apiMode: savedDraft?.apiMode ?? 'images',
       codexCli: false,
       apiProxy: false,
+      directApiAccess: false,
       responseFormatB64Json: savedDraft?.responseFormatB64Json,
       streamImages: false,
       streamPartialImages: savedDraft?.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES,
@@ -382,6 +384,7 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
     apiMode: savedDraft?.apiMode ?? profile.apiMode,
     codexCli: savedDraft?.codexCli ?? profile.codexCli,
     apiProxy: savedDraft?.apiProxy ?? DEFAULT_OPENAI_API_PROXY,
+    directApiAccess: savedDraft?.directApiAccess ?? false,
     responseFormatB64Json: savedDraft?.responseFormatB64Json,
     streamImages: savedDraft?.streamImages ?? (profile.provider === 'openai' ? profile.streamImages : true),
     streamPartialImages: savedDraft?.streamPartialImages ?? (profile.provider === 'openai' ? profile.streamPartialImages : DEFAULT_STREAM_PARTIAL_IMAGES),
@@ -406,6 +409,7 @@ function normalizeProviderDraft(input: unknown, provider: ApiProvider, customPro
     apiMode,
     codexCli: typeof input.codexCli === 'boolean' ? input.codexCli : fallback.codexCli,
     apiProxy: typeof input.apiProxy === 'boolean' ? input.apiProxy : fallback.apiProxy,
+    directApiAccess: typeof input.directApiAccess === 'boolean' ? input.directApiAccess : fallback.directApiAccess,
     responseFormatB64Json: input.responseFormatB64Json === true ? true : undefined,
     streamImages: typeof input.streamImages === 'boolean' ? input.streamImages : fallback.streamImages,
     streamPartialImages: normalizeStreamPartialImages(input.streamPartialImages, fallback.streamPartialImages),
@@ -441,6 +445,7 @@ export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfil
     apiMode,
     codexCli: Boolean(record.codexCli),
     apiProxy: typeof record.apiProxy === 'boolean' ? record.apiProxy : defaults.apiProxy,
+    directApiAccess: typeof record.directApiAccess === 'boolean' ? record.directApiAccess : defaults.directApiAccess,
     responseFormatB64Json: record.responseFormatB64Json === true ? true : undefined,
     streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : defaults.streamImages,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages, defaults.streamPartialImages),
@@ -474,6 +479,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     apiMode: record.apiMode === 'responses' ? 'responses' : 'images',
     codexCli: Boolean(record.codexCli),
     apiProxy: typeof record.apiProxy === 'boolean' ? record.apiProxy : DEFAULT_OPENAI_API_PROXY,
+    directApiAccess: typeof record.directApiAccess === 'boolean' ? record.directApiAccess : false,
     responseFormatB64Json: record.responseFormatB64Json === true ? true : undefined,
     streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : true,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages),
@@ -494,6 +500,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     apiMode: active.apiMode,
     codexCli: active.codexCli,
     apiProxy: active.apiProxy,
+    directApiAccess: active.directApiAccess,
     streamImages: active.streamImages,
     streamPartialImages: active.streamPartialImages,
     customProviders,
@@ -601,6 +608,7 @@ export function getActiveApiProfile(settings: Partial<AppSettings> | unknown): A
     apiMode: record.apiMode === 'images' || record.apiMode === 'responses' ? record.apiMode : profile.apiMode,
     codexCli: typeof record.codexCli === 'boolean' ? record.codexCli : profile.codexCli,
     apiProxy: typeof record.apiProxy === 'boolean' ? record.apiProxy : profile.apiProxy,
+    directApiAccess: typeof record.directApiAccess === 'boolean' ? record.directApiAccess : profile.directApiAccess,
     streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : profile.streamImages,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages, profile.streamPartialImages),
   }
@@ -616,7 +624,7 @@ export function validateApiProfile(profile: ApiProfile): string | null {
 
 function isDefaultOpenAIProfile(profile: ApiProfile): boolean {
   return profile.id === DEFAULT_OPENAI_PROFILE_ID &&
-    profile.name === '默认' &&
+    profile.name === 'TokFlux' &&
     profile.provider === 'openai' &&
     profile.baseUrl === DEFAULT_BASE_URL &&
     profile.apiKey === '' &&
@@ -625,6 +633,7 @@ function isDefaultOpenAIProfile(profile: ApiProfile): boolean {
     profile.apiMode === 'images' &&
     profile.codexCli === false &&
     profile.apiProxy === DEFAULT_OPENAI_API_PROXY &&
+    profile.directApiAccess === false &&
     profile.streamImages === true &&
     profile.streamPartialImages === DEFAULT_STREAM_PARTIAL_IMAGES
 }
@@ -781,6 +790,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   apiMode: 'images',
   codexCli: false,
   apiProxy: DEFAULT_OPENAI_API_PROXY,
+  directApiAccess: false,
   streamImages: true,
   streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,
   customProviders: [],

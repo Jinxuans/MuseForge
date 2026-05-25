@@ -7,7 +7,7 @@ import (
 
 const (
 	DefaultAddr            = ":5000"
-	DefaultUpstreamBaseURL = "https://api.openai.com/v1"
+	DefaultUpstreamBaseURL = "https://api.tokenflux.cloud/v1"
 )
 
 type Config struct {

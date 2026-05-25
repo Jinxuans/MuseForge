@@ -67,12 +67,13 @@ export interface ApiProfile {
   apiMode: ApiMode
   codexCli: boolean
   apiProxy: boolean
+  directApiAccess: boolean
   responseFormatB64Json?: boolean
   streamImages?: boolean
   streamPartialImages?: number
   /** 后端保存的渠道配置 ID；存在时服务端任务可只引用该配置，不携带明文 API Key */
   serverProfileId?: string
-  providerDrafts?: Partial<Record<ApiProvider, Partial<Pick<ApiProfile, 'baseUrl' | 'model' | 'apiMode' | 'codexCli' | 'apiProxy' | 'responseFormatB64Json' | 'streamImages' | 'streamPartialImages'>>>>
+  providerDrafts?: Partial<Record<ApiProvider, Partial<Pick<ApiProfile, 'baseUrl' | 'model' | 'apiMode' | 'codexCli' | 'apiProxy' | 'directApiAccess' | 'responseFormatB64Json' | 'streamImages' | 'streamPartialImages'>>>>
 }
 
 export interface AppSettings {
@@ -84,6 +85,7 @@ export interface AppSettings {
   apiMode: ApiMode
   codexCli: boolean
   apiProxy: boolean
+  directApiAccess: boolean
   streamImages?: boolean
   streamPartialImages?: number
   customProviders: CustomProviderDefinition[]
