@@ -4,19 +4,18 @@ import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
-
-const MIN_SCALE = 1
-const MAX_SCALE = 10
-const SWIPE_INTENT_THRESHOLD = 10
-const SWIPE_ACTION_THRESHOLD = 40
-const DOUBLE_TAP_DELAY = 350
-const DOUBLE_TAP_DISTANCE = 40
-
-type TouchIntent = 'none' | 'horizontal-swipe' | 'vertical-move' | 'zoom-pan' | 'pinch'
-
-function clamp(v: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, v))
-}
+import LightboxImageStage from './lightbox/LightboxImageStage'
+import LightboxNavOverlay from './lightbox/LightboxNavOverlay'
+import {
+  DOUBLE_TAP_DELAY,
+  DOUBLE_TAP_DISTANCE,
+  MAX_SCALE,
+  MIN_SCALE,
+  SWIPE_ACTION_THRESHOLD,
+  SWIPE_INTENT_THRESHOLD,
+  clamp,
+  type TouchIntent,
+} from './lightbox/lightboxHelpers'
 
 export default function Lightbox() {
   const lightboxImageId = useStore((s) => s.lightboxImageId)
@@ -601,9 +600,6 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
   const isDragging = dragRef.current.active || pinchRef.current.active
   const zoomPercent = Math.round(s * 100)
 
-  const navBtnClass =
-    'absolute top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/40 text-white hover:bg-black/60 transition-all z-10 backdrop-blur-sm'
-
   return (
     <div
       ref={containerRef}
@@ -614,69 +610,25 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
       onDoubleClick={onDoubleClick}
     >
       <div className="absolute inset-0 bg-black/70 backdrop-blur-md animate-fade-in" />
-      <div className="relative animate-zoom-in">
-        <div
-          className="relative flex items-center justify-center"
-          style={{
-            transform: `translate(${tx}px, ${ty}px) scale(${s})`,
-            transition: isDragging ? 'none' : 'transform 0.2s ease-out',
-            willChange: 'transform',
-          }}
-        >
-          <img
-            src={src}
-            data-image-id={imageId}
-            className="saveable-image max-w-[85vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
-            onDragStart={(e) => e.preventDefault()}
-            alt=""
-          />
-          {maskPreviewSrc && (
-            <img
-              src={maskPreviewSrc}
-              className="absolute inset-0 w-full h-full object-contain rounded-lg pointer-events-none"
-              alt=""
-            />
-          )}
-        </div>
-      </div>
-
-      {/* 左右切换按钮 */}
-      {showNav && !isZoomed && (
-        <>
-          <button
-            className={`${navBtnClass} left-3 sm:left-5`}
-            onClick={(e) => { e.stopPropagation(); goPrev() }}
-          >
-            <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <button
-            className={`${navBtnClass} right-3 sm:right-5`}
-            onClick={(e) => { e.stopPropagation(); goNext() }}
-          >
-            <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-        </>
-      )}
-
-      {/* 底部指示器 */}
-      {showZoomBadge && isZoomed && zoomPercent !== 100 && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 pointer-events-none">
-          <span className="px-3 py-1.5 bg-black/50 text-white/80 text-xs rounded-full backdrop-blur-sm transition-opacity duration-500">
-            {zoomPercent}%
-          </span>
-        </div>
-      )}
-      {showNav && !isZoomed && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 pointer-events-none">
-          <span className="px-3 py-1.5 bg-black/50 text-white/80 text-xs rounded-full backdrop-blur-sm">
-            {currentIndex + 1} / {total}
-          </span>
-        </div>
-      )}
+      <LightboxImageStage
+        src={src}
+        imageId={imageId}
+        maskPreviewSrc={maskPreviewSrc}
+        scale={s}
+        tx={tx}
+        ty={ty}
+        isDragging={isDragging}
+      />
+      <LightboxNavOverlay
+        showNav={showNav}
+        isZoomed={isZoomed}
+        showZoomBadge={showZoomBadge}
+        zoomPercent={zoomPercent}
+        currentIndex={currentIndex}
+        total={total}
+        onPrev={goPrev}
+        onNext={goNext}
+      />
     </div>
   )
 

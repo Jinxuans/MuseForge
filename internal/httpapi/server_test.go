@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"gpt-image-go/internal/config"
+	"museforge/internal/config"
 )
 
 func TestV1HealthCapabilitiesWrapsEnvelopeAndRequestID(t *testing.T) {

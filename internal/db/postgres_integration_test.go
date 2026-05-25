@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"gpt-image-go/internal/db"
-	"gpt-image-go/internal/providers"
-	"gpt-image-go/internal/tasks"
+	"museforge/internal/db"
+	"museforge/internal/providers"
+	"museforge/internal/tasks"
 
 	_ "github.com/lib/pq"
 )

@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"gpt-image-go/internal/redact"
-	"gpt-image-go/internal/storage"
+	"museforge/internal/redact"
+	"museforge/internal/storage"
 )
 
 type Worker struct {

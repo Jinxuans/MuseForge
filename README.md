@@ -4,7 +4,7 @@ MuseForge 是一个开源 AI 创作平台，当前以 TokFlux（原 TokenFlux）
 
 项目采用 Go + React/Vite 实现，不再依赖 PHP，并适配为由 Go 服务托管前端构建产物和同源 `/v1` 代理转发。普通图片生成和编辑默认只请求当前站点的 `/v1/images/generations`、`/v1/images/edits`，再由 Go 转发到 TokFlux 或你在前端填写的 OpenAI-compatible 上游。
 
-源码层面前后端分离，部署时由 Go 二进制托管前端构建产物。`web/dist` 是本地构建产物，不提交到仓库；运行或编译 Go 服务前需要先执行前端构建：
+源码层面前后端分离，部署时可由 Go 二进制托管前端构建产物。`web/dist` 是本地构建产物，不提交到仓库；本地开发时可以先启动 Go API，再由 Vite 托管前端：
 
 - 页面入口：`http://127.0.0.1:5000/`
 - 健康检查：`http://127.0.0.1:5000/health`
@@ -34,21 +34,24 @@ MuseForge 是一个开源 AI 创作平台，当前以 TokFlux（原 TokenFlux）
 /index.html?apiUrl=https://api.tokenflux.cloud/v1&apiKey=sk-xxx&apiMode=responses&model=gpt-5.5
 ```
 
-后续架构和产品演进计划见 [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md)。
-
 ## 运行
 
-首次运行前先构建前端。`go run ./cmd/server` 会通过 Go embed 托管 `web/dist`，因此未生成 `web/dist` 时 Go 编译会失败：
-
-```powershell
-npm install --prefix web
-npm run build --prefix web
-```
-
-启动 Go 服务：
+启动 Go 服务。未生成 `web/dist` 时，API 仍可正常启动；页面开发请配合下面的 Vite 开发服务：
 
 ```powershell
 go run ./cmd/server
+```
+
+Windows 下也可以一键启动后端和 Vite：
+
+```powershell
+.\scripts\dev.ps1
+```
+
+如果需要构建单二进制并内嵌前端产物：
+
+```powershell
+.\scripts\build-release.ps1
 ```
 
 ## 本地开发
@@ -232,7 +235,13 @@ LOG_FORMAT 支持 text/json，生产环境建议 json
 
 ```powershell
 npm run build --prefix web
-go build -buildvcs=false -o museforge.exe ./cmd/server
+go build -buildvcs=false -tags with_embed -o museforge.exe ./cmd/server
+```
+
+Windows 下可直接运行：
+
+```powershell
+.\scripts\build-release.ps1
 ```
 
 ## 自托管验证
@@ -240,10 +249,7 @@ go build -buildvcs=false -o museforge.exe ./cmd/server
 发布前建议至少跑一遍：
 
 ```powershell
-go test ./...
-npm run test --prefix web
-npm run build --prefix web
-go build -buildvcs=false -o tmp\museforge-check.exe .\cmd\server
+.\scripts\check.ps1
 ```
 
 如果本机可用 Docker，可以额外启动一次临时 PostgreSQL，验证数据库迁移幂等性和匿名客户端隔离：
@@ -267,15 +273,20 @@ Invoke-RestMethod http://127.0.0.1:5000/api/v1/health-capabilities
 ```text
 cmd/server/          Go 程序入口
 internal/config/     配置读取
-internal/httpapi/    HTTP API 与同步代理
+internal/httpapi/    HTTP API、同步代理、V1 envelope、任务/资产/渠道 handlers
 internal/db/         PostgreSQL 连接和迁移执行
 internal/tasks/      任务仓库与 worker
 internal/storage/    本地文件存储
 migrations/          数据库迁移
+scripts/             本地开发、发布构建和验证脚本
 web/                 React/Vite 前端工程
 web/src/             完整 React 前端应用
+web/src/components/  前端组件
+web/src/components/settings/ 设置页子组件
+web/src/store/       从 Zustand store 抽出的低耦合工具模块
+web/src/types/       按领域拆分的类型定义，web/src/types.ts 保持兼容重导出
 web/public/          PWA manifest、图标和 service worker
-web/dist/            前端本地构建产物，由 Go embed 打包，不提交到仓库
+web/dist/            前端本地构建产物，可由 Go embed 打包，不提交到仓库
 ```
 
 ## 许可说明

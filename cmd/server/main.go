@@ -9,14 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"gpt-image-go/internal/config"
-	"gpt-image-go/internal/db"
-	"gpt-image-go/internal/httpapi"
-	"gpt-image-go/internal/providers"
-	"gpt-image-go/internal/redact"
-	"gpt-image-go/internal/storage"
-	"gpt-image-go/internal/tasks"
-	"gpt-image-go/web"
+	"museforge/internal/config"
+	"museforge/internal/db"
+	"museforge/internal/httpapi"
+	"museforge/internal/providers"
+	"museforge/internal/redact"
+	"museforge/internal/storage"
+	"museforge/internal/tasks"
+	"museforge/web"
 )
 
 func main() {

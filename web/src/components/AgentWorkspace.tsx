@@ -1,303 +1,22 @@
-import { useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import type { AgentConversation, AgentMessage, AgentRound, ResponsesOutputItem, TaskRecord } from '../types'
-import { deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, getCachedImage, ensureImageCached, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, reuseConfig, updateTaskInStore, useStore } from '../store'
+import { useEffect, useMemo, useState, useRef, useCallback, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from 'react'
+import type { AgentMessage, AgentRound, TaskRecord } from '../types'
+import { deleteAgentRoundFromConversation, editOutputs, ensureImageCached, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, reuseConfig, updateTaskInStore, useStore } from '../store'
 import { getPromptMentionParts } from '../lib/promptImageMentions'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
-import { collectWebSearchCalls, getAgentRoundOutputItems, getWebSearchStatusForCalls, type AgentWebSearchStatus } from '../lib/agentWebSearch'
-import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { downloadImageIds } from '../lib/downloadImages'
 import TaskCard from './TaskCard'
-import ViewportTooltip from './ViewportTooltip'
 import MarkdownRenderer from './MarkdownRenderer'
 import { TrashIcon, DownloadIcon, EditIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, SidebarLeftIcon, FavoriteIcon, CloseIcon, CopyIcon, RefreshIcon, ArrowDownIcon } from './icons'
-
-function AgentActionButton({
-  tooltip,
-  className,
-  disabled = false,
-  onClick,
-  onMouseDown,
-  children,
-}: {
-  tooltip: string
-  className: string
-  disabled?: boolean
-  onClick?: (e: ReactMouseEvent<HTMLButtonElement>) => void
-  onMouseDown?: (e: ReactMouseEvent<HTMLButtonElement>) => void
-  children: ReactNode
-}) {
-  const [tooltipVisible, setTooltipVisible] = useState(false)
-
-  return (
-    <span
-      className="relative inline-flex"
-      onMouseEnter={() => setTooltipVisible(true)}
-      onMouseLeave={() => setTooltipVisible(false)}
-      onFocus={() => setTooltipVisible(true)}
-      onBlur={() => setTooltipVisible(false)}
-    >
-      <button
-        type="button"
-        className={className}
-        disabled={disabled}
-        aria-label={tooltip}
-        onClick={onClick}
-        onMouseDown={onMouseDown}
-      >
-        {children}
-      </button>
-      <ViewportTooltip visible={tooltipVisible} className="whitespace-nowrap">
-        {tooltip}
-      </ViewportTooltip>
-    </span>
-  )
-}
-
-function ChatImageThumb({ imageId, imageIndex, maskImageId }: { imageId: string; imageIndex: number; maskImageId?: string | null }) {
-  const [src, setSrc] = useState<string>(() => getCachedImage(imageId) || '')
-  const setLightboxImageId = useStore((s) => s.setLightboxImageId)
-
-  useEffect(() => {
-    let cancelled = false
-
-    if (maskImageId) {
-      Promise.all([ensureImageCached(imageId), ensureImageCached(maskImageId)])
-        .then(async ([baseUrl, maskUrl]) => {
-          if (!baseUrl || !maskUrl) return baseUrl || ''
-          return createMaskPreviewDataUrl(baseUrl, maskUrl)
-        })
-        .then((url) => {
-          if (!cancelled && url) setSrc(url)
-        })
-        .catch(() => {
-          if (!cancelled) setSrc(getCachedImage(imageId) || '')
-        })
-      return () => { cancelled = true }
-    }
-
-    const cached = getCachedImage(imageId)
-    if (cached) {
-      setSrc(cached)
-      return () => { cancelled = true }
-    }
-    ensureImageCached(imageId).then((url) => {
-      if (!cancelled && url) setSrc(url)
-    })
-    return () => { cancelled = true }
-  }, [imageId, maskImageId])
-
-  return (
-    <div 
-      className={`relative h-16 w-16 shrink-0 overflow-hidden rounded-lg shadow-sm cursor-pointer transition-opacity hover:opacity-90 ${
-        maskImageId ? 'border-2 border-blue-500' : 'border border-gray-200 dark:border-white/[0.08]'
-      }`}
-      onClick={() => setLightboxImageId(imageId, [imageId])}
-    >
-      {src ? <img src={src} className="h-full w-full object-cover" alt="" /> : <div className="h-full w-full bg-gray-100 dark:bg-white/[0.04]" />}
-      {maskImageId && (
-        <span className="absolute left-1 top-1 z-10 rounded bg-blue-500/90 px-1.5 py-0.5 text-[8px] font-bold leading-none tracking-wider text-white backdrop-blur-sm pointer-events-none">
-          MASK
-        </span>
-      )}
-      <span className="absolute bottom-1 left-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-black/55 text-[9px] font-semibold text-white backdrop-blur-sm pointer-events-none">
-        {imageIndex + 1}
-      </span>
-    </div>
-  )
-}
-
-function AgentStreamingCursor() {
-  return (
-    <span
-      aria-label="正在生成"
-      className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500 align-baseline dark:bg-blue-400"
-    />
-  )
-}
-
-const AGENT_STOPPED_MESSAGE = '已停止生成。'
-
-function formatTime(value: number) {
-  return new Date(value).toLocaleString()
-}
-
-function AgentWebSearchInlineStatus({ status }: { status: AgentWebSearchStatus }) {
-  return (
-    <span className="inline-flex text-sm font-medium text-gray-500 dark:text-gray-400">
-      <span className={status.completed ? undefined : 'agent-web-search-running-text'}>{status.text}</span>
-    </span>
-  )
-}
-
-function AgentWebSearchStatusLines({ statuses }: { statuses: AgentWebSearchStatus[] }) {
-  if (statuses.length === 0) return null
-  return (
-    <div className="mb-2 space-y-1">
-      {statuses.map((status, index) => (
-        <div key={`${status.text}-${index}`}>
-          <AgentWebSearchInlineStatus status={status} />
-        </div>
-      ))}
-    </div>
-  )
-}
-
-type AgentAssistantBlock =
-  | { type: 'web-search'; status: AgentWebSearchStatus; key: string }
-  | { type: 'batch-params'; status: AgentWebSearchStatus; key: string }
-  | { type: 'image-task'; task: TaskRecord; key: string }
-  | { type: 'deleted-image-task'; taskId: string; key: string }
-  | { type: 'text'; key: string; content?: string }
-
-interface AgentRoundTaskSlot {
-  taskId: string
-  task: TaskRecord | null
-}
-
-function isAgentRoundInterrupted(round: AgentRound | null) {
-  return round?.status === 'error' && round.error === AGENT_STOPPED_MESSAGE
-}
-
-function markToolStatusStopped(status: AgentWebSearchStatus): AgentWebSearchStatus {
-  if (status.completed) return status
-  return { text: status.text.replace(/^正在/, '已停止'), completed: true }
-}
-
-function getImageTaskForOutputItem(item: ResponsesOutputItem, tasksForRound: TaskRecord[]) {
-  if (item.type !== 'image_generation_call') return null
-  return tasksForRound.find((task) => task.agentToolCallId && task.agentToolCallId === item.id) ?? null
-}
-
-function getBatchImageTasksForOutputItem(item: ResponsesOutputItem, tasksForRound: TaskRecord[]) {
-  if (item.type !== 'function_call' || item.name !== 'generate_image_batch' || !item.call_id) return []
-  return tasksForRound.filter((task) => task.agentBatchCallId === item.call_id)
-}
-
-function getTextFromOutputItem(item: ResponsesOutputItem) {
-  if (item.type !== 'message') return ''
-  return (item.content ?? [])
-    .map((part) => typeof part.text === 'string' ? part.text : '')
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-}
-
-function getAgentAssistantBlocks(round: AgentRound | null, taskSlots: AgentRoundTaskSlot[], allTasks: TaskRecord[], hasText: boolean): AgentAssistantBlock[] {
-  const outputItems = getAgentRoundOutputItems(round, allTasks)
-  const tasksForRound = taskSlots.map((slot) => slot.task).filter(Boolean) as TaskRecord[]
-  const roundInterrupted = isAgentRoundInterrupted(round)
-  if (outputItems.length === 0) {
-    return [
-      ...(hasText ? [{ type: 'text' as const, key: 'text:fallback' }] : []),
-      ...taskSlots.map((slot) => slot.task
-        ? ({ type: 'image-task' as const, task: slot.task, key: `image:${slot.task.id}` })
-        : ({ type: 'deleted-image-task' as const, taskId: slot.taskId, key: `deleted-image:${slot.taskId}` }),
-      ),
-    ]
-  }
-
-  const blocks: AgentAssistantBlock[] = []
-  const renderedTaskIds = new Set<string>()
-  let renderedTextBlocks = 0
-  let webSearchGroup: ResponsesOutputItem[] = []
-
-  const flushWebSearchGroup = () => {
-    if (webSearchGroup.length === 0) return
-    const status = getWebSearchStatusForCalls(collectWebSearchCalls(webSearchGroup))
-    if (status) blocks.push({ type: 'web-search', status: roundInterrupted ? markToolStatusStopped(status) : status, key: `web-search:${blocks.length}:${webSearchGroup.map((item) => item.id).join(':')}` })
-    webSearchGroup = []
-  }
-
-  for (const item of outputItems) {
-    if (item.type === 'web_search_call') {
-      webSearchGroup.push(item)
-      continue
-    }
-
-    flushWebSearchGroup()
-
-    const imageTask = getImageTaskForOutputItem(item, tasksForRound)
-    if (imageTask && !renderedTaskIds.has(imageTask.id)) {
-      renderedTaskIds.add(imageTask.id)
-      blocks.push({ type: 'image-task', task: imageTask, key: `image:${imageTask.id}` })
-      continue
-    }
-
-    const batchImageTasks = getBatchImageTasksForOutputItem(item, tasksForRound)
-    if (batchImageTasks.length > 0) {
-      for (const task of batchImageTasks) {
-        if (renderedTaskIds.has(task.id)) continue
-        renderedTaskIds.add(task.id)
-        blocks.push({ type: 'image-task', task, key: `image:${task.id}` })
-      }
-      continue
-    }
-
-    if ((round?.status === 'running' || roundInterrupted) && item.type === 'function_call' && item.name === 'generate_image_batch') {
-      blocks.push({
-        type: 'batch-params',
-        status: roundInterrupted
-          ? markToolStatusStopped({ text: '正在填写并发图像生成参数', completed: false })
-          : { text: '正在填写并发图像生成参数', completed: false },
-        key: `batch-params:${item.call_id ?? item.id ?? blocks.length}`,
-      })
-      continue
-    }
-
-    if (item.type === 'message') {
-      const content = getTextFromOutputItem(item)
-      if (content) {
-        renderedTextBlocks += 1
-        blocks.push({ type: 'text', key: `text:${item.id ?? blocks.length}`, content })
-      }
-    }
-  }
-
-  flushWebSearchGroup()
-
-  if (hasText && renderedTextBlocks === 0) blocks.push({ type: 'text', key: 'text:fallback' })
-  for (const slot of taskSlots) {
-    if (slot.task) {
-      if (!renderedTaskIds.has(slot.task.id)) blocks.push({ type: 'image-task', task: slot.task, key: `image:${slot.task.id}` })
-    } else {
-      blocks.push({ type: 'deleted-image-task', taskId: slot.taskId, key: `deleted-image:${slot.taskId}` })
-    }
-  }
-  return blocks
-}
-
-function getAgentAssistantCopyContent(fallbackContent: string, blocks: AgentAssistantBlock[]) {
-  if (!blocks.some((block) => block.type !== 'text')) return fallbackContent
-
-  const parts = blocks
-    .filter((block): block is Extract<AgentAssistantBlock, { type: 'text' }> => block.type === 'text')
-    .map((block) => block.content ?? '')
-    .map((content) => content.trim())
-    .filter(Boolean)
-
-  return parts.length > 0 ? parts.join('\n\n') : fallbackContent
-}
-
-function getConversationSearchText(conversation: AgentConversation) {
-  return [
-    conversation.title,
-    ...conversation.messages.map((message) => message.content),
-    ...conversation.rounds.map((round) => round.prompt),
-  ].join('\n').toLocaleLowerCase()
-}
-
-function getRoundTasks(round: AgentRound | null, tasks: TaskRecord[]) {
-  if (!round) return []
-  return round.outputTaskIds.map((taskId) => tasks.find((task) => task.id === taskId) ?? null)
-}
-
-function getRoundTaskSlots(round: AgentRound | null, tasks: TaskRecord[]): AgentRoundTaskSlot[] {
-  if (!round) return []
-  return round.outputTaskIds.map((taskId) => ({
-    taskId,
-    task: tasks.find((task) => task.id === taskId) ?? null,
-  }))
-}
+import AgentConversationSidebar from './agent/AgentConversationSidebar'
+import { AgentActionButton, AgentWebSearchInlineStatus, AgentWebSearchStatusLines, ChatImageThumb } from './agent/AgentMessageParts'
+import {
+  AgentStreamingCursor,
+  getAgentAssistantBlocks,
+  getAgentAssistantCopyContent,
+  getConversationSearchText,
+  getRoundTasks,
+  getRoundTaskSlots,
+} from './agent/agentAssistantBlocks'
 
 const MOBILE_HEADER_PULL_THRESHOLD = 24
 const MOBILE_HEADER_PULL_MAX_OFFSET = 48
@@ -370,7 +89,7 @@ export default function AgentWorkspace() {
     window.scrollTo({ top: scrollingElement.scrollHeight, behavior: 'smooth' })
   }, [])
 
-  const handleTouchStart = (e: React.TouchEvent) => {
+  const handleTouchStart = (e: ReactTouchEvent) => {
     const touchY = e.touches[0]?.clientY ?? -1
     if (
       appMode !== 'agent' ||
@@ -386,11 +105,11 @@ export default function AgentWorkspace() {
     touchStartY.current = touchY
   }
 
-  const handleHeaderTouchStart = (e: React.TouchEvent) => {
+  const handleHeaderTouchStart = (e: ReactTouchEvent) => {
     touchStartY.current = e.touches[0].clientY
   }
    
-  const handleTouchMove = (e: React.TouchEvent) => {
+  const handleTouchMove = (e: ReactTouchEvent) => {
     if (touchStartY.current <= 0 || agentMobileHeaderVisible) return
 
     const diff = e.touches[0].clientY - touchStartY.current
@@ -410,7 +129,7 @@ export default function AgentWorkspace() {
     setPullDownOffset(Math.min(diff, MOBILE_HEADER_PULL_MAX_OFFSET))
   }
 
-  const handleTouchEnd = (e: React.TouchEvent) => {
+  const handleTouchEnd = (e: ReactTouchEvent) => {
     if (touchStartY.current > 0 && !agentMobileHeaderVisible) {
       const touchEndY = e.changedTouches[0].clientY
       if (touchEndY - touchStartY.current >= MOBILE_HEADER_PULL_THRESHOLD) setAgentMobileHeaderVisible(true)
@@ -620,7 +339,7 @@ export default function AgentWorkspace() {
     })
   }
 
-  const startRenameConversation = (e: ReactMouseEvent | React.TouchEvent, id: string, currentTitle: string) => {
+  const startRenameConversation = (e: ReactMouseEvent | ReactTouchEvent, id: string, currentTitle: string) => {
     e.stopPropagation()
     if (agentGeneratingTitleIds[id]) {
       showToast('标题生成中，暂不能修改标题', 'info')
@@ -637,7 +356,7 @@ export default function AgentWorkspace() {
     setAgentEditingConversationId(null)
   }
 
-  const handleRenameKeyDown = (e: React.KeyboardEvent) => {
+  const handleRenameKeyDown = (e: ReactKeyboardEvent) => {
     if (e.key === 'Enter') {
       e.preventDefault()
       confirmRenameConversation()
@@ -663,7 +382,7 @@ export default function AgentWorkspace() {
     conversationLongPressTimer.current = null
   }
 
-  const handleConversationPointerDown = (id: string, e: React.PointerEvent) => {
+  const handleConversationPointerDown = (id: string, e: ReactPointerEvent) => {
     if (e.pointerType === 'mouse') return
     clearConversationLongPressTimer()
     conversationLongPressTimer.current = window.setTimeout(() => {
@@ -835,99 +554,27 @@ export default function AgentWorkspace() {
         </div>
       )}
 
-      {/* Mobile Left Sidebar Overlay Backdrop */}
-      {!sidebarCollapsed && (
-        <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setSidebarCollapsed(true)} />
-      )}
-      
-      {/* Left Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 z-50 flex w-4/5 max-w-[320px] flex-col border-r border-gray-200 bg-white/95 shadow-2xl backdrop-blur transition-transform duration-300 dark:border-white/[0.08] dark:bg-gray-950/95 lg:hidden ${!sidebarCollapsed ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="pl-[max(1rem,env(safe-area-inset-left))] flex h-full min-h-0 w-full flex-col">
-          <div className="safe-area-top shrink-0">
-            <div className="flex h-14 items-center justify-between gap-2 px-4">
-              <button type="button" onClick={() => setSidebarCollapsed(true)} className="lg:hidden p-2 -ml-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg transition-colors" title="折叠左侧边栏">
-                <SidebarLeftIcon className="w-5 h-5" />
-              </button>
-              <button type="button" onClick={createConversation} className="p-2 -mr-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 lg:hover:bg-gray-100 lg:dark:hover:bg-white/[0.04] rounded-lg transition-colors" title="新对话">
-                <EditIcon className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
-          <div className="shrink-0 px-4 pb-3">
-            <input
-              type="text"
-              value={conversationSearchQuery}
-              onChange={(e) => setConversationSearchQuery(e.target.value)}
-              placeholder="搜索聊天..."
-              className="w-full rounded-xl border border-gray-200 bg-gray-100/80 px-3 py-2 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-400 focus:border-blue-400 focus:bg-white dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-white dark:focus:border-blue-400 dark:focus:bg-white/[0.07]"
-            />
-          </div>
-          <div className="space-y-1 overflow-y-auto flex-1 px-4 pb-4">
-          {filteredConversations.length === 0 && (
-            <div className="px-2 py-8 text-center text-sm text-gray-400">没有找到匹配的聊天</div>
-          )}
-          {filteredConversations.map((item) => {
-            const isGeneratingTitle = Boolean(agentGeneratingTitleIds[item.id])
-            return (
-              <div
-                key={item.id}
-                data-agent-conversation-item
-                className="group flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-gray-100 dark:hover:bg-white/[0.04]"
-                onPointerDown={(e) => handleConversationPointerDown(item.id, e)}
-                onPointerUp={clearConversationLongPressTimer}
-                onPointerCancel={clearConversationLongPressTimer}
-                onPointerLeave={clearConversationLongPressTimer}
-                onContextMenu={(e) => {
-                  if (conversationActionsId === item.id) e.preventDefault()
-                }}
-              >
-                {agentEditingConversationId === item.id ? (
-                  <div className="min-w-0 flex-1 flex flex-col justify-center h-[38px]">
-                    <input
-                      type="text"
-                      className="flex-1 bg-white dark:bg-black/20 border border-blue-400/50 dark:border-white/20 rounded px-1.5 py-0.5 text-sm outline-none text-gray-900 dark:text-white focus:border-blue-500 dark:focus:border-white/40 shadow-sm min-w-0"
-                      value={editingConversationTitle}
-                      onChange={(e) => setEditingConversationTitle(e.target.value)}
-                      onKeyDown={handleRenameKeyDown}
-                      onClick={(e) => e.stopPropagation()}
-                      autoFocus
-                      onBlur={confirmRenameConversation}
-                    />
-                  </div>
-                ) : (
-                  <button type="button" className="min-w-0 flex-1 text-left" onClick={() => handleConversationSelect(item.id)}>
-                    <div className={`truncate ${item.id === activeConversationId ? 'font-semibold text-gray-900 dark:text-white' : 'text-gray-700 dark:text-gray-300'}`}>{item.title}</div>
-                    <div className="text-xs text-gray-400">{formatTime(item.updatedAt)}</div>
-                  </button>
-                )}
-                <div className={`flex shrink-0 items-center gap-1 overflow-hidden transition-all duration-150 ${agentEditingConversationId === item.id ? 'w-6 opacity-100' : `group-hover:w-[4.5rem] group-hover:opacity-100 group-focus-within:w-[4.5rem] group-focus-within:opacity-100 ${conversationActionsId === item.id ? 'w-[4.5rem] opacity-100' : 'w-0 opacity-0'}`}`}>
-                  {agentEditingConversationId === item.id ? (
-                    <AgentActionButton
-                      tooltip="确认"
-                      onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); confirmRenameConversation() }}
-                      className="p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md text-green-500 hover:text-green-600 transition-colors"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                    </AgentActionButton>
-                  ) : (
-                    <>
-                      <AgentActionButton tooltip="编辑标题" className="p-1.5 text-gray-400 hover:text-gray-700 disabled:text-gray-300 disabled:hover:text-gray-300 disabled:cursor-not-allowed dark:hover:text-gray-200 dark:disabled:text-gray-600 dark:disabled:hover:text-gray-600" onClick={(e) => startRenameConversation(e, item.id, item.title)} disabled={isGeneratingTitle}>
-                        <EditIcon className="w-4 h-4" />
-                      </AgentActionButton>
-                      <AgentActionButton tooltip="删除" className="p-1.5 text-gray-400 hover:text-red-500" onClick={(e) => { e.stopPropagation(); handleDeleteConversation(item.id) }}>
-                        <TrashIcon className="w-4 h-4" />
-                      </AgentActionButton>
-                    </>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-        </div>
-      </aside>
+      <AgentConversationSidebar
+        collapsed={sidebarCollapsed}
+        activeConversationId={activeConversationId}
+        conversations={filteredConversations}
+        searchQuery={conversationSearchQuery}
+        editingConversationId={agentEditingConversationId}
+        editingConversationTitle={editingConversationTitle}
+        generatingTitleIds={agentGeneratingTitleIds}
+        conversationActionsId={conversationActionsId}
+        onCollapsedChange={setSidebarCollapsed}
+        onCreateConversation={createConversation}
+        onSearchQueryChange={setConversationSearchQuery}
+        onEditingConversationTitleChange={setEditingConversationTitle}
+        onConversationPointerDown={handleConversationPointerDown}
+        onClearConversationLongPressTimer={clearConversationLongPressTimer}
+        onConversationSelect={handleConversationSelect}
+        onRenameKeyDown={handleRenameKeyDown}
+        onConfirmRenameConversation={confirmRenameConversation}
+        onStartRenameConversation={startRenameConversation}
+        onDeleteConversation={handleDeleteConversation}
+      />
 
       {/* Center Chat Area */}
       <section className="min-w-0 flex-1 flex flex-col relative">

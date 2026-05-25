@@ -1,4 +1,4 @@
-module gpt-image-go
+module museforge
 
 go 1.22
 

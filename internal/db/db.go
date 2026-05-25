@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"gpt-image-go/migrations"
+	"museforge/migrations"
 
 	_ "github.com/lib/pq"
 )

@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"gpt-image-go/internal/storage"
+	"museforge/internal/storage"
 )
 
 type Cleaner struct {
