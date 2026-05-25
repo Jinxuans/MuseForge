@@ -1,2 +1,0 @@
-ALTER TABLE assets
-  ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
