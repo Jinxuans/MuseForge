@@ -69,6 +69,7 @@ export async function backendRequest<T>(path: string, options: BackendRequestOpt
 
   const response = await fetch(normalizePath(path), {
     ...options,
+    cache: options.cache ?? 'no-store',
     headers,
     body: body as BodyInit | null,
   })

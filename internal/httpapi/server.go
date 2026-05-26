@@ -87,6 +87,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	setCORS(lrw)
+	if isNoStorePath(r.URL.Path) {
+		setNoStore(lrw)
+	}
 	if r.Method == http.MethodOptions {
 		lrw.WriteHeader(http.StatusNoContent)
 		return
@@ -136,6 +139,16 @@ func setCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Client-ID, X-Request-ID")
+}
+
+func isNoStorePath(path string) bool {
+	return strings.HasPrefix(path, "/api/") || path == "/health"
+}
+
+func setNoStore(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 }
 
 type requestIDContextKey struct{}

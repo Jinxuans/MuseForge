@@ -1,4 +1,4 @@
-const CACHE_NAME = 'museforge-v0.1.0'
+const CACHE_NAME = 'museforge-v0.1.1'
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './pwa-icon.svg']
 
 self.addEventListener('install', (event) => {
@@ -24,6 +24,7 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url)
   if (url.origin !== self.location.origin) return
+  if (url.pathname.startsWith('/api/') || url.pathname === '/health') return
 
   if (request.mode === 'navigate') {
     event.respondWith(

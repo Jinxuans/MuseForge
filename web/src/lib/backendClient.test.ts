@@ -20,6 +20,7 @@ describe('backendRequest', () => {
 
     expect(data).toEqual({ asyncTasks: true })
     const [, init] = fetchMock.mock.calls[0]
+    expect((init as RequestInit).cache).toBe('no-store')
     const headers = new Headers((init as RequestInit).headers)
     expect(headers.get('X-Client-ID')).toBeTruthy()
   })
