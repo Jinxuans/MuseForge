@@ -116,7 +116,7 @@ func v1DataFromHandlerPayload(payload map[string]any) any {
 
 func v1TaskDTO(task map[string]any) map[string]any {
 	params := objectValue(task["params"])
-	if params == nil {
+	if len(params) == 0 {
 		params = objectValue(task["params_json"])
 	}
 	assets := arrayValue(task["assets"])

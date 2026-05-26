@@ -311,6 +311,28 @@ func TestV1TasksWithoutDatabaseReturnsServiceUnavailableEnvelope(t *testing.T) {
 	}
 }
 
+func TestV1TaskDTOFallsBackToParamsJSON(t *testing.T) {
+	dto := v1TaskDTO(map[string]any{
+		"id":          "task-1",
+		"type":        "generation",
+		"status":      "running",
+		"prompt":      "prompt",
+		"model":       "gpt-image-2",
+		"params_json": map[string]any{"size": "1024x1024", "n": float64(1)},
+	})
+
+	params, _ := dto["params"].(map[string]any)
+	if params == nil {
+		t.Fatalf("expected params object, got %T", dto["params"])
+	}
+	if size, _ := params["size"].(string); size != "1024x1024" {
+		t.Fatalf("size = %q, want 1024x1024", size)
+	}
+	if taskType, _ := dto["type"].(string); taskType != "image_generation" {
+		t.Fatalf("type = %q, want image_generation", taskType)
+	}
+}
+
 func TestV1AssetDTOUsesVisibilityWhenPresent(t *testing.T) {
 	dto := v1AssetDTO(map[string]any{
 		"id":         "asset-1",

@@ -3,7 +3,9 @@ package tasks
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -23,6 +26,8 @@ import (
 	"museforge/internal/redact"
 	"museforge/internal/storage"
 )
+
+const imageDownloadTimeout = 30 * time.Second
 
 type Worker struct {
 	repo          *Repository
@@ -100,6 +105,15 @@ func (w *Worker) loop(ctx context.Context) {
 
 func (w *Worker) runOne(ctx context.Context, work *TaskWork) {
 	startedAt := time.Now()
+	defer func() {
+		if rec := recover(); rec != nil {
+			message := sanitizeError(fmt.Errorf("worker panic: %v", rec))
+			if err := w.repo.MarkFailed(ctx, work.ID, message); err != nil {
+				slog.Error("task panic mark failed error", "task_id", work.ID, "error", err)
+			}
+			slog.Error("task worker panic", "task_id", work.ID, "task_type", work.Type, "duration_ms", time.Since(startedAt).Milliseconds(), "panic", rec)
+		}
+	}()
 	slog.Info("task started", "task_id", work.ID, "task_type", work.Type, "model", work.Model, "upstream_base_url", redact.String(work.BaseURL))
 	var err error
 	switch work.Type {
@@ -128,7 +142,9 @@ func (w *Worker) runOne(ctx context.Context, work *TaskWork) {
 				return
 			}
 		}
-		_ = w.repo.MarkFailed(ctx, work.ID, sanitized)
+		if markErr := w.repo.MarkFailed(ctx, work.ID, sanitized); markErr != nil {
+			slog.Error("task mark failed error", "task_id", work.ID, "error", markErr)
+		}
 		if cleanupErr := w.store.DeleteTaskUploads(work.ID); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
 			slog.Warn("task upload cleanup failed", "task_id", work.ID, "error", cleanupErr)
 		}
@@ -140,7 +156,10 @@ func (w *Worker) runOne(ctx context.Context, work *TaskWork) {
 		)
 		return
 	}
-	_ = w.repo.MarkSucceeded(ctx, work.ID)
+	if err := w.repo.MarkSucceeded(ctx, work.ID); err != nil {
+		slog.Error("task mark succeeded error", "task_id", work.ID, "error", err)
+		return
+	}
 	if cleanupErr := w.store.DeleteTaskUploads(work.ID); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
 		slog.Warn("task upload cleanup failed", "task_id", work.ID, "error", cleanupErr)
 	}
@@ -243,25 +262,9 @@ func (w *Worker) saveImageResponse(ctx context.Context, taskID string, startInde
 	}
 
 	for i, image := range decoded.Data {
-		data, err := w.imageBytes(ctx, image.B64JSON, image.URL)
+		asset, err := w.assetFromImageResponse(ctx, taskID, fmt.Sprintf("%d", startIndex+i), image.B64JSON, image.URL, image.RevisedPrompt)
 		if err != nil {
 			return i, err
-		}
-		saved, err := w.store.SaveResult(ctx, taskID, fmt.Sprintf("%d", startIndex+i), data)
-		if err != nil {
-			return i, err
-		}
-		asset := Asset{
-			ID:         newID(),
-			TaskID:     taskID,
-			StorageKey: saved.StorageKey,
-			PublicURL:  saved.PublicURL,
-			MIME:       saved.MIME,
-			Width:      saved.Width,
-			Height:     saved.Height,
-			SizeBytes:  saved.SizeBytes,
-			SHA256:     saved.SHA256,
-			Metadata:   assetMetadataForImage(image.RevisedPrompt),
 		}
 		if err := w.repo.CreateAsset(ctx, asset); err != nil {
 			return i, err
@@ -269,6 +272,83 @@ func (w *Worker) saveImageResponse(ctx context.Context, taskID string, startInde
 		slog.Info("asset created", "task_id", taskID, "asset_id", asset.ID, "storage_key", asset.StorageKey, "mime", asset.MIME, "size_bytes", asset.SizeBytes)
 	}
 	return len(decoded.Data), nil
+}
+
+func (w *Worker) assetFromImageResponse(ctx context.Context, taskID string, name string, b64 string, imageURL string, revisedPrompt string) (Asset, error) {
+	if b64 != "" {
+		data, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			return Asset{}, err
+		}
+		return w.localImageAsset(ctx, taskID, name, data, revisedPrompt)
+	}
+	if imageURL == "" {
+		return Asset{}, errors.New("image response missing b64_json and url")
+	}
+
+	downloadCtx, cancel := context.WithTimeout(ctx, imageDownloadTimeout)
+	data, err := w.imageBytes(downloadCtx, "", imageURL)
+	cancel()
+	if err == nil {
+		return w.localImageAsset(ctx, taskID, name, data, revisedPrompt)
+	}
+	if ctx.Err() != nil {
+		return Asset{}, ctx.Err()
+	}
+
+	slog.Warn("image download failed; storing remote asset URL", "task_id", taskID, "url", redact.String(imageURL), "error", sanitizeError(err))
+	return remoteImageAsset(taskID, name, imageURL, revisedPrompt), nil
+}
+
+func (w *Worker) localImageAsset(ctx context.Context, taskID string, name string, data []byte, revisedPrompt string) (Asset, error) {
+	saved, err := w.store.SaveResult(ctx, taskID, name, data)
+	if err != nil {
+		return Asset{}, err
+	}
+	return Asset{
+		ID:         newID(),
+		TaskID:     taskID,
+		StorageKey: saved.StorageKey,
+		PublicURL:  saved.PublicURL,
+		MIME:       saved.MIME,
+		Width:      saved.Width,
+		Height:     saved.Height,
+		SizeBytes:  saved.SizeBytes,
+		SHA256:     saved.SHA256,
+		Metadata:   assetMetadataForImage(revisedPrompt),
+	}, nil
+}
+
+func remoteImageAsset(taskID string, name string, imageURL string, revisedPrompt string) Asset {
+	sum := sha256.Sum256([]byte(imageURL))
+	return Asset{
+		ID:         newID(),
+		TaskID:     taskID,
+		StorageKey: filepath.ToSlash(filepath.Join("external", taskID, name)),
+		PublicURL:  imageURL,
+		MIME:       mimeForImageURL(imageURL),
+		SizeBytes:  0,
+		SHA256:     hex.EncodeToString(sum[:]),
+		Metadata:   assetMetadataForImage(revisedPrompt),
+	}
+}
+
+func mimeForImageURL(imageURL string) string {
+	parsed, err := url.Parse(imageURL)
+	pathValue := imageURL
+	if err == nil {
+		pathValue = parsed.Path
+	}
+	switch strings.ToLower(filepath.Ext(pathValue)) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".webp":
+		return "image/webp"
+	case ".png":
+		return "image/png"
+	default:
+		return "image/png"
+	}
 }
 
 func assetMetadataForImage(revisedPrompt string) json.RawMessage {

@@ -98,6 +98,32 @@ func TestAssetMetadataForImage(t *testing.T) {
 	}
 }
 
+func TestRemoteImageAssetKeepsProviderURL(t *testing.T) {
+	asset := remoteImageAsset("task-1", "0", "https://cdn.example.com/result.webp?token=secret", " revised ")
+	if asset.TaskID != "task-1" {
+		t.Fatalf("TaskID = %q, want task-1", asset.TaskID)
+	}
+	if asset.PublicURL != "https://cdn.example.com/result.webp?token=secret" {
+		t.Fatalf("PublicURL = %q", asset.PublicURL)
+	}
+	if asset.StorageKey != "external/task-1/0" {
+		t.Fatalf("StorageKey = %q, want external/task-1/0", asset.StorageKey)
+	}
+	if asset.MIME != "image/webp" {
+		t.Fatalf("MIME = %q, want image/webp", asset.MIME)
+	}
+	if asset.SHA256 == "" {
+		t.Fatalf("expected SHA256 for remote URL")
+	}
+	var metadata map[string]string
+	if err := json.Unmarshal(asset.Metadata, &metadata); err != nil {
+		t.Fatalf("decode metadata: %v", err)
+	}
+	if metadata["revised_prompt"] != "revised" {
+		t.Fatalf("revised_prompt = %q, want revised", metadata["revised_prompt"])
+	}
+}
+
 func TestRequestedImageCount(t *testing.T) {
 	tests := []struct {
 		name string
