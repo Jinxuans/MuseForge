@@ -13,6 +13,18 @@ type HintController = {
 
 type Option = { label: string; value: string }
 
+const CONTROL_CLASS = 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] focus:outline-none text-xs transition-all duration-200 shadow-sm'
+const DISABLED_CONTROL_CLASS = 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
+const FORMAT_OPTIONS = [
+  { label: 'PNG', value: 'png' },
+  { label: 'JPEG', value: 'jpeg' },
+  { label: 'WebP', value: 'webp' },
+]
+const MODERATION_OPTIONS = [
+  { label: 'auto', value: 'auto' },
+  { label: 'low', value: 'low' },
+]
+
 type TaskParamPanelProps = {
   cols: string
   params: TaskParams
@@ -48,6 +60,25 @@ type TaskParamPanelProps = {
   setNInputFocused: (focused: boolean) => void
   commitN: () => void
   handleNLimitIncreaseAttempt: (preventDefault: () => void) => void
+}
+
+function getHintTriggerProps(hint: HintController) {
+  return {
+    onMouseEnter: hint.show,
+    onMouseLeave: hint.hide,
+    onTouchStart: hint.startTouch,
+    onTouchEnd: hint.clearTimer,
+    onTouchCancel: hint.hide,
+    onClick: hint.show,
+  }
+}
+
+function numberInputClass(disabled: boolean) {
+  return `px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] focus:outline-none text-xs transition-all duration-200 shadow-sm ${
+    disabled
+      ? 'bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed'
+      : 'bg-white/50 dark:bg-white/[0.03]'
+  }`
 }
 
 export default function TaskParamPanel({
@@ -90,18 +121,13 @@ export default function TaskParamPanel({
     <div className={`grid ${cols} gap-2 text-xs flex-1`}>
       <label
         className="relative flex flex-col gap-0.5"
-        onMouseEnter={sizeHint.show}
-        onMouseLeave={sizeHint.hide}
-        onTouchStart={sizeHint.startTouch}
-        onTouchEnd={sizeHint.clearTimer}
-        onTouchCancel={sizeHint.hide}
-        onClick={sizeHint.show}
+        {...getHintTriggerProps(sizeHint)}
       >
         <span className="text-gray-400 dark:text-gray-500 ml-1">尺寸</span>
         <button
           type="button"
           onClick={() => { dismissTooltips(); setShowSizePicker(true) }}
-          className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] focus:outline-none text-xs text-left transition-all duration-200 shadow-sm font-mono"
+          className={`${CONTROL_CLASS} text-left font-mono`}
           title="选择尺寸"
         >
           {displaySize}
@@ -113,12 +139,7 @@ export default function TaskParamPanel({
       </label>
       <label
         className="relative flex flex-col gap-0.5"
-        onMouseEnter={qualityHint.show}
-        onMouseLeave={qualityHint.hide}
-        onTouchStart={qualityHint.startTouch}
-        onTouchEnd={qualityHint.clearTimer}
-        onTouchCancel={qualityHint.hide}
-        onClick={qualityHint.show}
+        {...getHintTriggerProps(qualityHint)}
       >
         <span className="text-gray-400 dark:text-gray-500 ml-1">质量</span>
         <Select
@@ -128,9 +149,7 @@ export default function TaskParamPanel({
           }}
           options={qualityOptions}
           disabled={settingsCodexCli}
-          className={settingsCodexCli
-            ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
-            : selectClass}
+          className={settingsCodexCli ? DISABLED_CONTROL_CLASS : selectClass}
         />
         <ButtonTooltip
           visible={(settingsCodexCli || isFalProvider) && qualityHint.visible}
@@ -142,22 +161,13 @@ export default function TaskParamPanel({
         <Select
           value={params.output_format}
           onChange={(val) => setParams({ output_format: val as TaskParams['output_format'] })}
-          options={[
-            { label: 'PNG', value: 'png' },
-            { label: 'JPEG', value: 'jpeg' },
-            { label: 'WebP', value: 'webp' },
-          ]}
+          options={FORMAT_OPTIONS}
           className={selectClass}
         />
       </label>
       <label
         className="relative flex flex-col gap-0.5"
-        onMouseEnter={compressionHint.show}
-        onMouseLeave={compressionHint.hide}
-        onTouchStart={compressionHint.startTouch}
-        onTouchEnd={compressionHint.clearTimer}
-        onTouchCancel={compressionHint.hide}
-        onClick={compressionHint.show}
+        {...getHintTriggerProps(compressionHint)}
       >
         <span className="text-gray-400 dark:text-gray-500 ml-1">压缩率</span>
         <input
@@ -169,11 +179,7 @@ export default function TaskParamPanel({
           min={0}
           max={100}
           placeholder="0-100"
-          className={`px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] focus:outline-none text-xs transition-all duration-200 shadow-sm ${
-            compressionDisabled
-              ? 'bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed'
-              : 'bg-white/50 dark:bg-white/[0.03]'
-            }`}
+          className={numberInputClass(compressionDisabled)}
         />
         <ButtonTooltip
           visible={compressionHint.visible}
@@ -182,12 +188,7 @@ export default function TaskParamPanel({
       </label>
       <label
         className="relative flex flex-col gap-0.5"
-        onMouseEnter={moderationHint.show}
-        onMouseLeave={moderationHint.hide}
-        onTouchStart={moderationHint.startTouch}
-        onTouchEnd={moderationHint.clearTimer}
-        onTouchCancel={moderationHint.hide}
-        onClick={moderationHint.show}
+        {...getHintTriggerProps(moderationHint)}
       >
         <span className="text-gray-400 dark:text-gray-500 ml-1">审核</span>
         <Select
@@ -195,14 +196,9 @@ export default function TaskParamPanel({
           onChange={(val) => {
             if (!moderationDisabled) setParams({ moderation: val as TaskParams['moderation'] })
           }}
-          options={[
-            { label: 'auto', value: 'auto' },
-            { label: 'low', value: 'low' },
-          ]}
+          options={MODERATION_OPTIONS}
           disabled={moderationDisabled}
-          className={moderationDisabled
-            ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
-            : selectClass}
+          className={moderationDisabled ? DISABLED_CONTROL_CLASS : selectClass}
         />
         <ButtonTooltip
           visible={moderationDisabled && moderationHint.visible}
@@ -244,11 +240,7 @@ export default function TaskParamPanel({
           type={agentAutoImageCount ? 'text' : 'number'}
           min={agentAutoImageCount ? undefined : 1}
           max={agentAutoImageCount ? undefined : outputImageLimit}
-          className={`px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] focus:outline-none text-xs transition-all duration-200 shadow-sm ${
-            agentAutoImageCount
-              ? 'bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed'
-              : 'bg-white/50 dark:bg-white/[0.03]'
-          }`}
+          className={numberInputClass(agentAutoImageCount)}
         />
         <ButtonTooltip visible={nLimitHint.visible} text={nLimitHintText} />
         <ButtonTooltip visible={streamConcurrentByN && !nLimitHint.visible} text="数量大于 1 时会将多图生成拆分为并发单图" />
