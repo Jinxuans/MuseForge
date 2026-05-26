@@ -1,4 +1,4 @@
-import { getSelectedTextMentionLabel } from '../../lib/promptImageMentions'
+import { getPromptIndexFromVisibleIndex, getSelectedTextMentionLabel, stripImageMentionMarkers } from '../../lib/promptImageMentions'
 
 function getMentionTagTextLength(el: Element) {
   return el.textContent?.length ?? 0
@@ -158,6 +158,15 @@ export function getContentEditablePlainText(el: HTMLElement): string {
   }
   el.childNodes.forEach(appendNodeText)
   return text.replace(/\r\n?/g, '\n')
+}
+
+export function getSelectedPromptText(el: HTMLElement, prompt: string): string | null {
+  const selection = getContentEditableSelection(el)
+  if (selection.start === selection.end) return null
+
+  const promptStart = getPromptIndexFromVisibleIndex(prompt, selection.start)
+  const promptEnd = getPromptIndexFromVisibleIndex(prompt, selection.end)
+  return stripImageMentionMarkers(prompt.slice(promptStart, promptEnd))
 }
 
 function escapeHtml(text: string) {
