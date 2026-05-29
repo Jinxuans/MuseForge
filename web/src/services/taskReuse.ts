@@ -1,8 +1,8 @@
 import type { AppSettings, InputImage, MaskDraft, TaskRecord } from '../types'
 import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { ensureImageCached } from '../store/imageCache'
-import { createSettingsForApiProfile, getTaskApiProfile, getTaskApiProfileName } from '../store/taskDomain'
+import { ensureImageCached } from '../store/images/imageCache'
+import { createSettingsForApiProfile, getTaskApiProfile, getTaskApiProfileName } from '../store/tasks/taskDomain'
 
 export async function prepareTaskReuse(task: TaskRecord, settings: AppSettings) {
   const normalizedSettings = normalizeSettings(settings)

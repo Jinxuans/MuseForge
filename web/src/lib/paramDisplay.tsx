@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TaskParams, TaskRecord } from '../types'
-import ViewportTooltip from '../components/ViewportTooltip'
+import ViewportTooltip from '../shared/ui/ViewportTooltip'
 
 type ParamKey = keyof TaskParams
 

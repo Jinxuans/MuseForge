@@ -25,6 +25,7 @@ import {
   type CallApiOptions,
   type CallApiResult,
 } from './imageApiShared'
+import { attachErrorDebugPayload } from './errorDebugPayload'
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -117,14 +118,14 @@ async function extractCustomImages(payload: unknown, result: CustomProviderResul
     }
   } catch (err) {
     if (rawImageUrls.length > 0 && err instanceof Error) {
-      (err as any).rawImageUrls = rawImageUrls
+      attachErrorDebugPayload(err, { rawImageUrls })
     }
     throw err
   }
 
   if (!images.length) {
     const err = new Error('接口没有返回可识别的图片数据，请查看原始响应内容确认接口实际返回的数据结构，并根据 API 文档调整「自定义服务商」配置中的结果提取路径。')
-    ;(err as any).rawResponsePayload = JSON.stringify(payload, null, 2)
+    attachErrorDebugPayload(err, { rawResponsePayload: JSON.stringify(payload, null, 2) })
     throw err
   }
   return { images, ...(rawImageUrls.length ? { rawImageUrls } : {}) }
@@ -255,7 +256,7 @@ export async function callCustomHttpImageApi(opts: CallApiOptions, profile: ApiP
     const taskId = typeof taskIdValue === 'string' ? taskIdValue.trim() : String(taskIdValue ?? '').trim()
     if (submitMapping.taskIdPath && !taskId) {
       const err = new Error('无法从响应中提取异步任务 ID，请查看原始响应内容确认接口实际返回的数据结构，并根据 API 文档调整「自定义服务商」配置中的 taskIdPath。')
-      ;(err as any).rawResponsePayload = JSON.stringify(submitPayload, null, 2)
+      attachErrorDebugPayload(err, { rawResponsePayload: JSON.stringify(submitPayload, null, 2) })
       throw err
     }
     if (!taskId) return extractCustomImages(submitPayload, submitMapping.result ?? {}, mime, controller.signal)

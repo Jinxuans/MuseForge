@@ -80,7 +80,7 @@ function getContentEditableBoundaryOffset(
     // 如果是父容器，根据偏移量判断是在输入框前还是后
     if (container.contains(root)) {
       const children = Array.from(container.childNodes)
-      const rootIndex = children.indexOf(root as any)
+      const rootIndex = children.indexOf(root as ChildNode)
       return offset <= rootIndex ? 0 : root.textContent?.length ?? 0
     }
     return edge === 'start' ? 0 : root.textContent?.length ?? 0

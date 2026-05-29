@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type MutableRefObject, type ReactNode } fr
 import type { AgentConversation, InputImage, TaskRecord } from '../../types'
 import { ensureImageCached, getActiveAgentRounds, getCachedImage } from '../../store'
 import { collectAgentRoundOutputImageSlots } from '../../lib/agentImageReferences'
-import ViewportTooltip from '../ViewportTooltip'
+import ViewportTooltip from '../../shared/ui/ViewportTooltip'
 
 export type AtImageOption =
   | { type: 'input'; key: string; label: string; imageId: string; dataUrl: string; imageIndex: number }

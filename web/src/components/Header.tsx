@@ -3,10 +3,10 @@ import { useStore } from '../store'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import { useTooltip } from '../hooks/useTooltip'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
-import ViewportTooltip from './ViewportTooltip'
+import ViewportTooltip from '../shared/ui/ViewportTooltip'
 import HelpModal from './HelpModal'
 import HistoryModal from './HistoryModal'
-import { EditIcon, HelpCircleIcon, HistoryIcon, InstallIcon, SettingsIcon } from './icons'
+import { EditIcon, HelpCircleIcon, HistoryIcon, InstallIcon, SettingsIcon } from '../shared/ui/icons'
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>

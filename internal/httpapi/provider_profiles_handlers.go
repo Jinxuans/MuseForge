@@ -101,94 +101,22 @@ func (s *Server) handleProviderProfileByID(w http.ResponseWriter, r *http.Reques
 			jsonResponse(w, http.StatusBadRequest, errorPayload("Request body must be JSON."))
 			return
 		}
-		name, ok, valid := optionalPayloadString(payload, "name")
-		if !valid {
-			jsonResponse(w, http.StatusBadRequest, errorPayload("name must be a string."))
+		patch, err := parseProviderProfilePatch(payload, s.resolveUpstreamBaseURLNoFallback)
+		if err != nil {
+			jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
 			return
-		}
-		if ok {
-			trimmed := strings.TrimSpace(name)
-			if trimmed == "" {
-				jsonResponse(w, http.StatusBadRequest, errorPayload("name cannot be empty."))
-				return
-			}
-			name = trimmed
-		}
-		profileType, hasType, valid := optionalPayloadString(payload, "type")
-		if !valid {
-			jsonResponse(w, http.StatusBadRequest, errorPayload("type must be a string."))
-			return
-		}
-		if hasType {
-			profileType, err = normalizeProviderProfileType(profileType)
-			if err != nil {
-				jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
-				return
-			}
-		}
-		baseURL, hasBaseURL, valid := optionalPayloadString(payload, "base_url", "baseUrl")
-		if !valid {
-			jsonResponse(w, http.StatusBadRequest, errorPayload("base_url must be a string."))
-			return
-		}
-		if hasBaseURL {
-			baseURL, err = s.resolveUpstreamBaseURLNoFallback(baseURL)
-			if err != nil {
-				jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
-				return
-			}
-		}
-		apiKey, hasAPIKey, valid := optionalPayloadString(payload, "api_key", "apiKey")
-		if !valid {
-			jsonResponse(w, http.StatusBadRequest, errorPayload("api_key must be a string."))
-			return
-		}
-		if hasAPIKey {
-			apiKey = strings.TrimSpace(apiKey)
-		}
-		model, hasModel, valid := optionalPayloadString(payload, "model", "default_model", "defaultModel")
-		if !valid {
-			jsonResponse(w, http.StatusBadRequest, errorPayload("model must be a string."))
-			return
-		}
-		if hasModel {
-			model = strings.TrimSpace(model)
-		}
-		apiMode, hasAPIMode, valid := optionalPayloadString(payload, "api_mode", "apiMode")
-		if !valid {
-			jsonResponse(w, http.StatusBadRequest, errorPayload("api_mode must be a string."))
-			return
-		}
-		if hasAPIMode {
-			apiMode, err = normalizeProviderProfileAPIMode(apiMode)
-			if err != nil {
-				jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
-				return
-			}
-		}
-		providerConfig, hasProviderConfig, valid := optionalPayloadJSON(payload, "provider_config", "providerConfig", "provider_config_json")
-		if !valid {
-			jsonResponse(w, http.StatusBadRequest, errorPayload("provider_config must be valid JSON."))
-			return
-		}
-		if hasProviderConfig {
-			providerConfig, err = normalizeProviderProfileConfig(providerConfig)
-			if err != nil {
-				jsonResponse(w, http.StatusBadRequest, errorPayload(err.Error()))
-				return
-			}
 		}
 		profile, err := s.providers.Update(
 			r.Context(),
 			clientHash,
 			id,
-			optionalStringPointer(name, ok),
-			optionalStringPointer(profileType, hasType),
-			optionalStringPointer(baseURL, hasBaseURL),
-			optionalStringPointer(apiKey, hasAPIKey),
-			optionalStringPointer(model, hasModel),
-			optionalStringPointer(apiMode, hasAPIMode),
-			optionalJSONPointer(providerConfig, hasProviderConfig),
+			patch.Name,
+			patch.Type,
+			patch.BaseURL,
+			patch.APIKey,
+			patch.Model,
+			patch.APIMode,
+			patch.ProviderConfig,
 		)
 		if err != nil {
 			jsonResponse(w, http.StatusInternalServerError, errorPayload(err.Error()))

@@ -1,7 +1,7 @@
 import type { ApiProfile, AppSettings, ResponsesOutputItem, TaskParams } from '../types'
 import { callAgentConversationTitleApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage } from '../lib/agentApi'
 import { extractAgentReferenceIds } from '../lib/agentImageReferences'
-import { readAgentImageDataUrls } from '../store/agentApiInputItems'
+import { readAgentImageDataUrls } from '../store/agent/agentApiInputItems'
 
 type ReferenceImages = {
   dataUrls: string[]

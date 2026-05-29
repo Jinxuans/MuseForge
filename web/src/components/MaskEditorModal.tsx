@@ -3,29 +3,24 @@ import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent }
 import { createPortal } from 'react-dom'
 import { ensureImageCached, useStore } from '../store'
 import { loadImage } from '../lib/canvasImage'
-import { prepareMaskTargetDataUrl, replaceMaskTargetImage } from '../lib/maskPreprocess'
+import { prepareMaskTargetDataUrl } from '../lib/maskPreprocess'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import {
-  clampViewTransform,
-  getComfortableInitialTransform,
-  getPinchTransform,
   zoomAtPoint,
   type Point,
-  type ViewTransform,
 } from '../lib/viewportTransform'
 import {
-  centroid,
-  createSavedMaskDraft,
-  DEFAULT_VIEW_TRANSFORM,
-  distance,
   drawMaskImageToCanvas,
   fillWhiteMask,
-  firstTwoPointers,
   getCanvasPoint,
 } from './maskEditor/maskEditorCanvas'
 import MaskEditorHeader from './maskEditor/MaskEditorHeader'
 import MaskEditorToolbar from './maskEditor/MaskEditorToolbar'
+import { useMaskCanvasDrawing } from './maskEditor/useMaskCanvasDrawing'
+import { useMaskHistory } from './maskEditor/useMaskHistory'
+import { useMaskSaveLifecycle } from './maskEditor/useMaskSaveLifecycle'
+import { useMaskViewportGestures } from './maskEditor/useMaskViewportGestures'
 
 type Tool = 'brush' | 'eraser'
 
@@ -37,18 +32,6 @@ interface CanvasSize {
 interface SliderAnchor {
   left: number
   bottom: number
-}
-
-interface PinchGesture {
-  startTransform: ViewTransform
-  startCentroid: Point
-  startDistance: number
-}
-
-interface PanGesture {
-  pointerId: number
-  startPoint: Point
-  startTransform: ViewTransform
 }
 
 export default function MaskEditorModal() {
@@ -73,31 +56,75 @@ export default function MaskEditorModal() {
   const activePointerIdRef = useRef<number | null>(null)
   const lastPointRef = useRef<Point | null>(null)
   const pointerPositionsRef = useRef<Map<number, Point>>(new Map())
-  const pinchGestureRef = useRef<PinchGesture | null>(null)
-  const panGestureRef = useRef<PanGesture | null>(null)
-  const undoStackRef = useRef<ImageData[]>([])
-  const redoStackRef = useRef<ImageData[]>([])
-  const previewFrameRef = useRef<number | null>(null)
-  const saveTokenRef = useRef(0)
-  const sessionIdRef = useRef(0)
-  const activeSessionIdRef = useRef(0)
-  const viewTransformRef = useRef<ViewTransform>(DEFAULT_VIEW_TRANSFORM)
 
   const [sourceDataUrl, setSourceDataUrl] = useState('')
   const [size, setSize] = useState<CanvasSize | null>(null)
   const [tool, setTool] = useState<Tool>('brush')
   const [brushSize, setBrushSize] = useState(64)
   const [showBrushControls, setShowBrushControls] = useState(false)
-  const [viewTransform, setViewTransform] = useState<ViewTransform>(DEFAULT_VIEW_TRANSFORM)
   const [isLoading, setIsLoading] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
-  const [historyState, setHistoryState] = useState({ undo: 0, redo: 0 })
   const [hoverPoint, setHoverPoint] = useState<Point | null>(null)
   const [isPointerOverCanvas, setIsPointerOverCanvas] = useState(false)
   const [isAltKeyPressed, setIsAltKeyPressed] = useState(false)
-  const [isPanning, setIsPanning] = useState(false)
   const [sliderAnchor, setSliderAnchor] = useState<SliderAnchor | null>(null)
   const [showMaskInfo, setShowMaskInfo] = useState(false)
+  const isCanvasReady = Boolean(sourceDataUrl && size && !isLoading)
+  const { handleSave, isSaving } = useMaskSaveLifecycle({
+    imageId,
+    isCanvasReady,
+    maskCanvasRef,
+    setMaskDraft,
+    setMaskEditorImageId,
+    showToast,
+    sourceDataUrl,
+  })
+  const {
+    beginPinchGesture,
+    clearViewportGestures,
+    commitViewTransform,
+    finishPanGesture,
+    isPanning,
+    resetViewTransform,
+    resetViewportState,
+    startPanGesture,
+    updatePanGesture,
+    updatePinchAfterPointerRelease,
+    updatePinchGesture,
+    viewTransform,
+    viewTransformRef,
+  } = useMaskViewportGestures({
+    baseFrameRef,
+    pointerPositionsRef,
+    stageRef,
+  })
+  const {
+    cancelPreviewRender,
+    drawAt,
+    drawStroke,
+    getViewportCenterCanvasPoint,
+    renderPreview,
+    updateCursor,
+  } = useMaskCanvasDrawing({
+    baseFrameRef,
+    brushSize,
+    cursorCanvasRef,
+    maskCanvasRef,
+    previewCanvasRef,
+    stageRef,
+    tool,
+    viewTransformRef,
+  })
+  const {
+    cancelLastUndoSnapshot,
+    historyState,
+    pushUndoSnapshot,
+    redo: handleRedo,
+    resetHistory,
+    undo: handleUndo,
+  } = useMaskHistory({
+    maskCanvasRef,
+    onMaskRestored: renderPreview,
+  })
 
   const close = () => {
     if (isSaving) return
@@ -146,275 +173,22 @@ export default function MaskEditorModal() {
     })
   }
 
-  function commitViewTransform(nextTransform: ViewTransform) {
-    const frame = baseFrameRef.current
-    const clamped = frame
-      ? clampViewTransform(nextTransform, { width: frame.clientWidth, height: frame.clientHeight })
-      : nextTransform
-    viewTransformRef.current = clamped
-    setViewTransform(clamped)
-  }
-
-  function resetViewTransform() {
-    const frame = baseFrameRef.current
-    const stage = stageRef.current
-    const isCompactLayout = window.matchMedia('(max-width: 1023px)').matches
-    if (!frame || !stage) {
-      commitViewTransform(DEFAULT_VIEW_TRANSFORM)
-      return
-    }
-
-    commitViewTransform(getComfortableInitialTransform(
-      { width: frame.clientWidth, height: frame.clientHeight },
-      { width: stage.clientWidth, height: stage.clientHeight },
-      isCompactLayout,
-    ))
-  }
-
   function cancelActiveStroke() {
     if (activePointerIdRef.current == null) return
 
-    const previous = undoStackRef.current.pop()
-    if (previous) restoreMask(previous)
+    cancelLastUndoSnapshot()
     activePointerIdRef.current = null
     lastPointRef.current = null
-    syncHistoryState()
-  }
-
-  function beginPinchGesture() {
-    const pointers = firstTwoPointers(pointerPositionsRef.current)
-    const frame = baseFrameRef.current
-    if (!pointers || !frame) return
-
-    const rect = frame.getBoundingClientRect()
-    const startCentroid = centroid(pointers[0], pointers[1])
-    pinchGestureRef.current = {
-      startTransform: viewTransformRef.current,
-      startCentroid: {
-        x: startCentroid.x - rect.left,
-        y: startCentroid.y - rect.top,
-      },
-      startDistance: distance(pointers[0], pointers[1]),
-    }
-  }
-
-  function updatePinchGesture() {
-    const pointers = firstTwoPointers(pointerPositionsRef.current)
-    const gesture = pinchGestureRef.current
-    const frame = baseFrameRef.current
-    if (!pointers || !gesture || !frame) return
-
-    const rect = frame.getBoundingClientRect()
-    const nextCentroid = centroid(pointers[0], pointers[1])
-    commitViewTransform(getPinchTransform({
-      startTransform: gesture.startTransform,
-      startCentroid: gesture.startCentroid,
-      nextCentroid: {
-        x: nextCentroid.x - rect.left,
-        y: nextCentroid.y - rect.top,
-      },
-      startDistance: gesture.startDistance,
-      nextDistance: distance(pointers[0], pointers[1]),
-      viewportSize: { width: frame.clientWidth, height: frame.clientHeight },
-    }))
-  }
-
-  function syncHistoryState() {
-    setHistoryState({
-      undo: undoStackRef.current.length,
-      redo: redoStackRef.current.length,
-    })
-  }
-
-  function renderPreviewNow() {
-    const maskCanvas = maskCanvasRef.current
-    const previewCanvas = previewCanvasRef.current
-    if (!maskCanvas || !previewCanvas) return
-
-    const previewCtx = previewCanvas.getContext('2d')
-    if (!previewCtx) return
-
-    previewFrameRef.current = null
-    previewCtx.save()
-    previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height)
-    previewCtx.globalCompositeOperation = 'source-over'
-    previewCtx.fillStyle = 'rgba(59, 130, 246, 0.58)'
-    previewCtx.fillRect(0, 0, previewCanvas.width, previewCanvas.height)
-    previewCtx.globalCompositeOperation = 'destination-out'
-    previewCtx.drawImage(maskCanvas, 0, 0)
-    previewCtx.restore()
-  }
-
-  function renderPreview() {
-    if (previewFrameRef.current != null) return
-    previewFrameRef.current = window.requestAnimationFrame(renderPreviewNow)
-  }
-
-  function updateCursor(point: Point | null) {
-    const cursorCanvas = cursorCanvasRef.current
-    const stage = stageRef.current
-    const frame = baseFrameRef.current
-    const maskCanvas = maskCanvasRef.current
-    const ctx = cursorCanvas?.getContext('2d')
-    if (!cursorCanvas || !ctx || !stage || !frame || !maskCanvas) return
-
-    const dpr = window.devicePixelRatio || 1
-    const width = stage.clientWidth
-    const height = stage.clientHeight
-    if (cursorCanvas.width !== Math.round(width * dpr) || cursorCanvas.height !== Math.round(height * dpr)) {
-      cursorCanvas.width = Math.round(width * dpr)
-      cursorCanvas.height = Math.round(height * dpr)
-    }
-
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.clearRect(0, 0, width, height)
-    if (!point) return
-
-    const scale = viewTransformRef.current.scale
-    const stageRect = stage.getBoundingClientRect()
-    const frameRect = frame.getBoundingClientRect()
-    const frameLeft = frameRect.left - stageRect.left
-    const frameTop = frameRect.top - stageRect.top
-    const x = frameLeft + (point.x / maskCanvas.width) * frame.clientWidth * scale + viewTransformRef.current.x
-    const y = frameTop + (point.y / maskCanvas.height) * frame.clientHeight * scale + viewTransformRef.current.y
-    const radius = (brushSize / 2 / maskCanvas.width) * frame.clientWidth * scale
-
-    ctx.save()
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.arc(x, y, radius, 0, Math.PI * 2)
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'
-    ctx.stroke()
-    
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)'
-    ctx.beginPath()
-    ctx.arc(x, y, radius + 1, 0, Math.PI * 2)
-    ctx.stroke()
-    
-    ctx.beginPath()
-    ctx.arc(x, y, Math.max(0, radius - 1), 0, Math.PI * 2)
-    ctx.stroke()
-
-    const crosshairSize = 5
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)'
-    ctx.beginPath()
-    ctx.moveTo(x - crosshairSize, y)
-    ctx.lineTo(x + crosshairSize, y)
-    ctx.moveTo(x, y - crosshairSize)
-    ctx.lineTo(x, y + crosshairSize)
-    ctx.stroke()
-
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)'
-    ctx.beginPath()
-    ctx.moveTo(x - crosshairSize, y)
-    ctx.lineTo(x + crosshairSize, y)
-    ctx.moveTo(x, y - crosshairSize)
-    ctx.lineTo(x, y + crosshairSize)
-    ctx.stroke()
-    ctx.restore()
-  }
-
-  function getViewportCenterCanvasPoint(): Point | null {
-    const frame = baseFrameRef.current
-    const maskCanvas = maskCanvasRef.current
-    if (!frame || !maskCanvas) return null
-
-    const transform = viewTransformRef.current
-    return {
-      x: ((frame.clientWidth / 2 - transform.x) / transform.scale / frame.clientWidth) * maskCanvas.width,
-      y: ((frame.clientHeight / 2 - transform.y) / transform.scale / frame.clientHeight) * maskCanvas.height,
-    }
-  }
-
-  function pushUndoSnapshot() {
-    const canvas = maskCanvasRef.current
-    const ctx = canvas?.getContext('2d', { willReadFrequently: true })
-    if (!canvas || !ctx) return
-
-    undoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height))
-    if (undoStackRef.current.length > 40) undoStackRef.current.shift()
-    redoStackRef.current = []
-    syncHistoryState()
-  }
-
-  function restoreMask(imageData: ImageData) {
-    const canvas = maskCanvasRef.current
-    const ctx = canvas?.getContext('2d', { willReadFrequently: true })
-    if (!canvas || !ctx) return
-
-    ctx.putImageData(imageData, 0, 0)
-    renderPreview()
-  }
-
-  function drawAt(point: Point, nextTool = tool) {
-    const canvas = maskCanvasRef.current
-    const ctx = canvas?.getContext('2d')
-    if (!canvas || !ctx) return
-
-    ctx.save()
-    ctx.globalCompositeOperation = nextTool === 'brush' ? 'destination-out' : 'source-over'
-    ctx.fillStyle = '#fff'
-    ctx.beginPath()
-    ctx.arc(point.x, point.y, brushSize / 2, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.restore()
-    renderPreview()
-  }
-
-  function drawStroke(from: Point, to: Point, nextTool = tool) {
-    const canvas = maskCanvasRef.current
-    const ctx = canvas?.getContext('2d')
-    if (!canvas || !ctx) return
-
-    ctx.save()
-    ctx.globalCompositeOperation = nextTool === 'brush' ? 'destination-out' : 'source-over'
-    ctx.strokeStyle = '#fff'
-    ctx.lineWidth = brushSize
-    ctx.lineCap = 'round'
-    ctx.lineJoin = 'round'
-    ctx.beginPath()
-    ctx.moveTo(from.x, from.y)
-    ctx.lineTo(to.x, to.y)
-    ctx.stroke()
-    ctx.restore()
-    renderPreview()
   }
 
   useEffect(() => {
     if (!imageId) {
-      activeSessionIdRef.current = 0
-      return
-    }
-
-    const nextSessionId = sessionIdRef.current + 1
-    sessionIdRef.current = nextSessionId
-    activeSessionIdRef.current = nextSessionId
-
-    return () => {
-      if (activeSessionIdRef.current === nextSessionId) {
-        activeSessionIdRef.current = 0
-      }
-    }
-  }, [imageId])
-
-  useEffect(() => {
-    if (!imageId) {
-      if (previewFrameRef.current != null) {
-        window.cancelAnimationFrame(previewFrameRef.current)
-        previewFrameRef.current = null
-      }
+      cancelPreviewRender()
       setSourceDataUrl('')
       setSize(null)
       setIsLoading(false)
-      pointerPositionsRef.current.clear()
-      pinchGestureRef.current = null
-      panGestureRef.current = null
-      setIsPanning(false)
-      viewTransformRef.current = DEFAULT_VIEW_TRANSFORM
-      setViewTransform(DEFAULT_VIEW_TRANSFORM)
-      undoStackRef.current = []
-      redoStackRef.current = []
-      syncHistoryState()
+      resetViewportState()
+      resetHistory()
       return
     }
 
@@ -423,9 +197,7 @@ export default function MaskEditorModal() {
     setIsLoading(true)
     setSourceDataUrl('')
     setSize(null)
-    undoStackRef.current = []
-    redoStackRef.current = []
-    syncHistoryState()
+    resetHistory()
 
     async function loadCanvases() {
       try {
@@ -497,18 +269,12 @@ export default function MaskEditorModal() {
 
     return () => {
       cancelled = true
-      if (previewFrameRef.current != null) {
-        window.cancelAnimationFrame(previewFrameRef.current)
-        previewFrameRef.current = null
-      }
+      cancelPreviewRender()
       activePointerIdRef.current = null
       lastPointRef.current = null
-      pointerPositionsRef.current.clear()
-      pinchGestureRef.current = null
-      panGestureRef.current = null
-      setIsPanning(false)
+      clearViewportGestures()
     }
-  }, [imageId, maskDraft, setMaskEditorImageId, showToast])
+  }, [cancelPreviewRender, clearViewportGestures, imageId, maskDraft, renderPreview, resetHistory, resetViewportState, setMaskEditorImageId, showToast])
 
   useEffect(() => {
     if (isAltKeyPressed) {
@@ -570,7 +336,7 @@ export default function MaskEditorModal() {
 
   if (!imageId) return null
 
-  const isReady = Boolean(sourceDataUrl && size && !isLoading)
+  const isReady = isCanvasReady
   const canUndo = historyState.undo > 0 && isReady && !isSaving
   const canRedo = historyState.redo > 0 && isReady && !isSaving
   const isZoomed = viewTransform.scale > 1.01 || Math.abs(viewTransform.x) > 1 || Math.abs(viewTransform.y) > 1
@@ -586,12 +352,7 @@ export default function MaskEditorModal() {
       if (!canvas.hasPointerCapture(event.pointerId)) {
         canvas.setPointerCapture(event.pointerId)
       }
-      panGestureRef.current = {
-        pointerId: event.pointerId,
-        startPoint: { x: event.clientX, y: event.clientY },
-        startTransform: viewTransformRef.current,
-      }
-      setIsPanning(true)
+      startPanGesture(event.pointerId, { x: event.clientX, y: event.clientY })
       updateCursor(null)
       return
     }
@@ -622,26 +383,16 @@ export default function MaskEditorModal() {
       updateCursor(event.altKey || isAltKeyPressed ? null : point)
     }
 
-    const panGesture = panGestureRef.current
-    if (panGesture?.pointerId === event.pointerId) {
-      const frame = baseFrameRef.current
-      if (!frame) return
-
+    if (updatePanGesture(event.pointerId, { x: event.clientX, y: event.clientY })) {
       event.preventDefault()
-      commitViewTransform({
-        scale: panGesture.startTransform.scale,
-        x: panGesture.startTransform.x + event.clientX - panGesture.startPoint.x,
-        y: panGesture.startTransform.y + event.clientY - panGesture.startPoint.y,
-      })
       return
     }
 
     if (pointerPositionsRef.current.has(event.pointerId)) {
       pointerPositionsRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
     }
-    if (pinchGestureRef.current && pointerPositionsRef.current.size >= 2) {
+    if (updatePinchGesture()) {
       event.preventDefault()
-      updatePinchGesture()
       return
     }
     if (activePointerIdRef.current !== event.pointerId || !lastPointRef.current || !isReady || isSaving) return
@@ -683,43 +434,14 @@ export default function MaskEditorModal() {
     }
     pointerPositionsRef.current.delete(event.pointerId)
 
-    if (pinchGestureRef.current) {
-      if (pointerPositionsRef.current.size >= 2) beginPinchGesture()
-      else pinchGestureRef.current = null
-    }
-
-    if (panGestureRef.current?.pointerId === event.pointerId) {
-      panGestureRef.current = null
-      setIsPanning(false)
-    }
+    updatePinchAfterPointerRelease()
+    finishPanGesture(event.pointerId)
 
     if (activePointerIdRef.current === event.pointerId) {
       activePointerIdRef.current = null
       lastPointRef.current = null
       if (hoverPoint) updateCursor(hoverPoint)
     }
-  }
-
-  const handleUndo = () => {
-    const canvas = maskCanvasRef.current
-    const ctx = canvas?.getContext('2d', { willReadFrequently: true })
-    const previous = undoStackRef.current.pop()
-    if (!canvas || !ctx || !previous) return
-
-    redoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height))
-    restoreMask(previous)
-    syncHistoryState()
-  }
-
-  const handleRedo = () => {
-    const canvas = maskCanvasRef.current
-    const ctx = canvas?.getContext('2d', { willReadFrequently: true })
-    const next = redoStackRef.current.pop()
-    if (!canvas || !ctx || !next) return
-
-    undoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height))
-    restoreMask(next)
-    syncHistoryState()
   }
 
   const handleClear = () => {
@@ -729,45 +451,6 @@ export default function MaskEditorModal() {
     pushUndoSnapshot()
     fillWhiteMask(canvas)
     renderPreview()
-  }
-
-  const handleSave = async () => {
-    const canvas = maskCanvasRef.current
-    const savingSessionId = activeSessionIdRef.current
-    if (!canvas || !sourceDataUrl || !imageId || !isReady || isSaving || !savingSessionId) return
-
-    const token = ++saveTokenRef.current
-    const savingImageId = imageId
-    try {
-      setIsSaving(true)
-      const saved = await createSavedMaskDraft({
-        canvas,
-        sourceDataUrl,
-      })
-      if (
-        saveTokenRef.current !== token ||
-        activeSessionIdRef.current !== savingSessionId ||
-        useStore.getState().maskEditorImageId !== savingImageId
-      ) return
-
-      const latestStore = useStore.getState()
-      latestStore.setInputImages(
-        replaceMaskTargetImage(latestStore.inputImages, savingImageId, saved.workingTarget),
-        { equivalentImageIds: { [savingImageId]: saved.workingTarget.id } },
-      )
-      setMaskDraft(saved.maskDraft)
-      setMaskEditorImageId(null)
-      showToast('遮罩已保存', 'success')
-    } catch (err) {
-      if (
-        saveTokenRef.current !== token ||
-        activeSessionIdRef.current !== savingSessionId ||
-        useStore.getState().maskEditorImageId !== savingImageId
-      ) return
-      showToast(err instanceof Error ? err.message : String(err), 'error')
-    } finally {
-      if (saveTokenRef.current === token) setIsSaving(false)
-    }
   }
 
   const toggleBrushControls = () => {

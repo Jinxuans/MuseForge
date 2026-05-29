@@ -1,7 +1,8 @@
-import { useRef, type RefObject } from 'react'
+import type { RefObject } from 'react'
 import type { TaskRecord } from '../../types'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../../lib/clipboard'
-import { CloseIcon, CopyIcon } from '../icons'
+import ModalFrame from '../../shared/ui/ModalFrame'
+import { CloseIcon, CopyIcon } from '../../shared/ui/icons'
 
 type ModalRef = RefObject<HTMLDivElement | null>
 
@@ -21,23 +22,14 @@ export function RawImageUrlsModal({
   onClose: () => void
   showToast: (message: string, type?: 'info' | 'success' | 'error') => void
 }) {
-  const backdropPointerDownRef = useRef(false)
-
   if (rawImageUrls.length === 0) return null
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-6"
-      onPointerDown={(e) => {
-        backdropPointerDownRef.current = e.target === e.currentTarget
-      }}
-      onClick={(e) => {
-        e.stopPropagation()
-        if (backdropPointerDownRef.current && e.target === e.currentTarget) onClose()
-        backdropPointerDownRef.current = false
-      }}
+    <ModalFrame
+      panelRef={modalRef}
+      onClose={onClose}
+      panelClassName="flex w-full max-w-2xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]"
     >
-      <div ref={modalRef} className="flex w-full max-w-2xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-white/[0.08] shrink-0">
           <h3 className="text-base font-semibold text-gray-900 dark:text-white">原始图片链接 ({rawImageUrls.length})</h3>
           <div className="flex items-center gap-2">
@@ -97,8 +89,7 @@ export function RawImageUrlsModal({
             ))}
           </div>
         </div>
-      </div>
-    </div>
+    </ModalFrame>
   )
 }
 
@@ -125,28 +116,15 @@ export function TaskDebugSnapshotModal({
   onClose: () => void
   onCopyDebugSnapshot: () => void
 }) {
-  const backdropPointerDownRef = useRef(false)
-
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-6"
-      onPointerDown={(e) => {
-        backdropPointerDownRef.current = e.target === e.currentTarget
-      }}
-      onClick={(e) => {
-        e.stopPropagation()
-        if (backdropPointerDownRef.current && e.target === e.currentTarget) onClose()
-        backdropPointerDownRef.current = false
+    <ModalFrame
+      panelRef={modalRef}
+      onClose={onClose}
+      panelClassName="flex w-full max-w-3xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]"
+      onPanelPointerDown={(e) => {
+          if (!(e.target as Element).closest('[data-selectable-text]')) clearTextSelection()
       }}
     >
-      <div
-        ref={modalRef}
-        className="flex w-full max-w-3xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]"
-        onPointerDown={(e) => {
-          if (!(e.target as Element).closest('[data-selectable-text]')) clearTextSelection()
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
         <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-white/[0.08] shrink-0">
           <h3 className="text-base font-semibold text-gray-900 dark:text-white">错误快照</h3>
           <div className="flex items-center gap-2">
@@ -241,8 +219,7 @@ export function TaskDebugSnapshotModal({
             )}
           </div>
         </div>
-      </div>
-    </div>
+    </ModalFrame>
   )
 }
 
@@ -259,28 +236,15 @@ export function RawResponseModal({
   onClose: () => void
   showToast: (message: string, type?: 'info' | 'success' | 'error') => void
 }) {
-  const backdropPointerDownRef = useRef(false)
-
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-6"
-      onPointerDown={(e) => {
-        backdropPointerDownRef.current = e.target === e.currentTarget
-      }}
-      onClick={(e) => {
-        e.stopPropagation()
-        if (backdropPointerDownRef.current && e.target === e.currentTarget) onClose()
-        backdropPointerDownRef.current = false
+    <ModalFrame
+      panelRef={modalRef}
+      onClose={onClose}
+      panelClassName="flex w-full max-w-3xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]"
+      onPanelPointerDown={(e) => {
+          if (!(e.target as Element).closest('[data-selectable-text]')) clearTextSelection()
       }}
     >
-      <div
-        ref={modalRef}
-        className="flex w-full max-w-3xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]"
-        onPointerDown={(e) => {
-          if (!(e.target as Element).closest('[data-selectable-text]')) clearTextSelection()
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
         <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-white/[0.08] shrink-0">
           <h3 className="text-base font-semibold text-gray-900 dark:text-white">原始响应数据</h3>
           <div className="flex items-center gap-2">
@@ -313,7 +277,6 @@ export function RawResponseModal({
             {sanitizedRawResponsePayload}
           </pre>
         </div>
-      </div>
-    </div>
+    </ModalFrame>
   )
 }

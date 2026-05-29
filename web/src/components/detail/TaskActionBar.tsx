@@ -1,5 +1,5 @@
 import type { TaskRecord, TaskView } from '../../types'
-import { EditIcon, TrashIcon } from '../icons'
+import { EditIcon, TrashIcon } from '../../shared/ui/icons'
 
 type TaskActionBarProps = {
   task: TaskRecord

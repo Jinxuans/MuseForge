@@ -11,23 +11,24 @@ import type {
   TaskRecord,
   TaskView,
 } from '../types'
-import type { AgentInputDraft } from './agentInputDrafts'
+import type { AgentInputDraft } from './agent/agentInputDrafts'
 import type { ToastType } from './errorMessages'
 
 export type SettingsTab = 'general' | 'agent' | 'api' | 'data' | 'about'
 
-export interface AppState {
-  // 模式
+export interface AppModeState {
   appMode: AppMode
   setAppMode: (mode: AppMode) => void
+}
 
-  // 设置
+export interface SettingsState {
   settings: AppSettings
   setSettings: (s: Partial<AppSettings>) => void
   dismissedCodexCliPrompts: string[]
   dismissCodexCliPrompt: (key: string) => void
+}
 
-  // 输入
+export interface InputState {
   prompt: string
   setPrompt: (p: string) => void
   inputImages: InputImage[]
@@ -43,16 +44,18 @@ export interface AppState {
   maskEditorImageId: string | null
   setMaskEditorImageId: (id: string | null) => void
   galleryInputDraft: AgentInputDraft | null
+}
 
-  // 参数
+export interface TaskParamState {
   params: TaskParams
   setParams: (p: Partial<TaskParams>) => void
   reusedTaskApiProfileId: string | null
   reusedTaskApiProfileName: string | null
   reusedTaskApiProfileMissing: boolean
   setReusedTaskApiProfile: (profileId: string | null, missing?: boolean, profileName?: string | null) => void
+}
 
-  // Agent
+export interface AgentConversationState {
   agentConversations: AgentConversation[]
   agentConversationsLoaded: boolean
   activeAgentConversationId: string | null
@@ -75,15 +78,17 @@ export interface AppState {
   setAgentMobileHeaderVisible: (visible: boolean) => void
   setAgentEditingRoundId: (id: string | null) => void
   setAgentEditingConversationId: (id: string | null) => void
+}
 
-  // 任务列表
+export interface TaskListState {
   tasks: TaskRecord[]
   setTasks: (t: TaskRecord[]) => void
   streamPreviews: Record<string, string>
   streamPreviewSlots: Record<string, Record<string, string>>
   setTaskStreamPreview: (taskId: string, image?: string, requestIndex?: number) => void
+}
 
-  // 搜索和筛选
+export interface CollectionState {
   searchQuery: string
   setSearchQuery: (q: string) => void
   filterStatus: 'all' | 'running' | 'done' | 'error'
@@ -100,8 +105,9 @@ export interface AppState {
   deleteCategory: (id: string) => void
   moveCategoryTaskIds: string[] | null
   setMoveCategoryTaskIds: (ids: string[] | null) => void
+}
 
-  // 提示词库
+export interface PromptLibraryState {
   promptLibrary: PromptLibraryItem[]
   showPromptLibrary: boolean
   setShowPromptLibrary: (show: boolean) => void
@@ -110,14 +116,16 @@ export interface AppState {
   deletePromptLibraryItem: (id: string) => void
   shareToSquareTarget: SquareShareTarget | null
   setShareToSquareTarget: (target: SquareShareTarget | null) => void
+}
 
-  // 多选
+export interface SelectionState {
   selectedTaskIds: string[]
   setSelectedTaskIds: (ids: string[] | ((prev: string[]) => string[])) => void
   toggleTaskSelection: (id: string, force?: boolean) => void
   clearSelection: () => void
+}
 
-  // UI
+export interface UiState {
   detailTaskId: string | null
   setDetailTaskId: (id: string | null) => void
   lightboxImageId: string | null
@@ -131,12 +139,14 @@ export interface AppState {
   supportPromptSkippedForImportedData: boolean
   setSupportPromptOpen: (v: boolean) => void
   dismissSupportPrompt: () => void
+}
 
-  // Toast
+export interface ToastState {
   toast: { message: string; type: ToastType } | null
   showToast: (message: string, type?: ToastType) => void
+}
 
-  // Confirm dialog
+export interface ConfirmDialogState {
   confirmDialog: {
     title: string
     message: string
@@ -163,3 +173,17 @@ export interface AppState {
   } | null
   setConfirmDialog: (d: AppState['confirmDialog']) => void
 }
+
+export interface AppState extends
+  AppModeState,
+  SettingsState,
+  InputState,
+  TaskParamState,
+  AgentConversationState,
+  TaskListState,
+  CollectionState,
+  PromptLibraryState,
+  SelectionState,
+  UiState,
+  ToastState,
+  ConfirmDialogState {}

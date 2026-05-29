@@ -7,19 +7,19 @@ import Header from './components/Header'
 import SearchBar from './components/SearchBar'
 import TaskGrid from './components/TaskGrid'
 import InputBar from './components/InputBar'
-import ConfirmDialog from './components/ConfirmDialog'
-import Toast from './components/Toast'
+import ConfirmDialog from './shared/ui/ConfirmDialog'
+import Toast from './shared/ui/Toast'
 import ImageContextMenu from './components/ImageContextMenu'
 import TaskContextMenu from './components/TaskContextMenu'
 import { useGlobalClickSuppression } from './lib/clickSuppression'
 
 const AgentWorkspace = lazy(() => import('./components/AgentWorkspace'))
-const SquarePage = lazy(() => import('./components/SquarePage'))
+const SquarePage = lazy(() => import('./features/square/components/SquarePage'))
 const DetailModal = lazy(() => import('./components/DetailModal'))
 const Lightbox = lazy(() => import('./components/Lightbox'))
-const SettingsModal = lazy(() => import('./components/SettingsModal'))
+const SettingsModal = lazy(() => import('./features/settings/components/SettingsModal'))
 const MaskEditorModal = lazy(() => import('./components/MaskEditorModal'))
-const ShareToSquareModal = lazy(() => import('./components/ShareToSquareModal'))
+const ShareToSquareModal = lazy(() => import('./features/square/components/ShareToSquareModal'))
 const SupportPromptModal = lazy(() => import('./components/SupportPromptModal'))
 const PromptLibraryDrawer = lazy(() => import('./components/PromptLibraryDrawer'))
 const MoveCategoryModal = lazy(() => import('./components/MoveCategoryModal'))

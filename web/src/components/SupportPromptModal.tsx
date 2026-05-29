@@ -2,7 +2,7 @@ import { createPortal } from 'react-dom'
 import { useStore } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
-import { CloseIcon } from './icons'
+import { CloseIcon } from '../shared/ui/icons'
 
 export default function SupportPromptModal() {
   const supportPromptOpen = useStore((s) => s.supportPromptOpen)

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type DragEvent, type Touch } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type MutableRefObject, type Touch, type TouchEvent } from 'react'
 import type { InputImage } from '../../types'
 import { getSafeBoundingClientRect } from '../../lib/domRect'
 
-type TouchDragPreview = { src: string; x: number; y: number } | null
+export type TouchDragState = { index: number | null; startX: number; startY: number; moved: boolean }
+export type TouchDragPreview = { src: string; x: number; y: number } | null
 
 type UseInputImageDragArgs = {
   hideImageHint: () => void
@@ -116,5 +117,162 @@ export function useInputImageDrag({
     setTouchDragPreview,
     suppressImageClickRef,
     touchDragPreview,
+  }
+}
+
+export type InputImageDragControls = ReturnType<typeof useInputImageDrag>
+
+type CreateInputImageThumbDragHandlersArgs = {
+  clearImageHintTimer: () => void
+  displaySrc: string
+  getDataTransferDragIndex: (event: DragEvent<HTMLDivElement>) => number | null
+  getTouchDropIndex: (touch: Touch) => number | null
+  hideImageHint: () => void
+  hideLockedImageHint: () => void
+  imageDragIndexRef: MutableRefObject<number | null>
+  imageDragOverIndexRef: MutableRefObject<number | null>
+  imageDragPreviewRef: MutableRefObject<HTMLElement | null>
+  imageTouchDragRef: MutableRefObject<TouchDragState>
+  img: InputImage
+  idx: number
+  isMaskTarget: boolean
+  moveInputImage: (fromIdx: number, toIdx: number) => void
+  resetImageDrag: () => void
+  setImageDragIndex: (idx: number | null) => void
+  setImageDragTarget: (idx: number | null, clientX?: number) => void
+  setImageHintId: (id: string | null) => void
+  setTouchDragPreview: (preview: TouchDragPreview) => void
+  showImageHintUntilRelease: (id: string) => void
+  suppressImageClickRef: MutableRefObject<boolean>
+}
+
+export function createInputImageThumbDragHandlers({
+  clearImageHintTimer,
+  displaySrc,
+  getDataTransferDragIndex,
+  getTouchDropIndex,
+  hideImageHint,
+  hideLockedImageHint,
+  imageDragIndexRef,
+  imageDragOverIndexRef,
+  imageDragPreviewRef,
+  imageTouchDragRef,
+  img,
+  idx,
+  isMaskTarget,
+  moveInputImage,
+  resetImageDrag,
+  setImageDragIndex,
+  setImageDragTarget,
+  setImageHintId,
+  setTouchDragPreview,
+  showImageHintUntilRelease,
+  suppressImageClickRef,
+}: CreateInputImageThumbDragHandlersArgs) {
+  const handleDragStart = (e: DragEvent<HTMLDivElement>) => {
+    if (isMaskTarget) {
+      showImageHintUntilRelease(img.id)
+      e.preventDefault()
+      return
+    }
+    hideImageHint()
+    imageDragIndexRef.current = idx
+    setImageDragIndex(idx)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', String(idx))
+    const preview = document.createElement('div')
+    preview.style.cssText = 'position:fixed;left:-1000px;top:-1000px;width:52px;height:52px;border-radius:12px;overflow:hidden;box-shadow:0 4px 12px rgba(0,0,0,0.25);'
+    const previewImg = document.createElement('img')
+    previewImg.src = displaySrc
+    previewImg.style.cssText = 'width:52px;height:52px;object-fit:cover;display:block;'
+    preview.appendChild(previewImg)
+    document.body.appendChild(preview)
+    imageDragPreviewRef.current = preview
+    e.dataTransfer.setDragImage(preview, 26, 26)
+  }
+
+  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const fromIdx = imageDragIndexRef.current
+    if (fromIdx === null || fromIdx === idx) return
+    const rect = getSafeBoundingClientRect(e.currentTarget)
+    if (!rect) return
+    setImageDragTarget(e.clientX < rect.left + rect.width / 2 ? idx : idx + 1, e.clientX)
+  }
+
+  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    const fromIdx = imageDragIndexRef.current ?? getDataTransferDragIndex(e)
+    const toIdx = imageDragOverIndexRef.current
+    if (fromIdx !== null && toIdx !== null) {
+      moveInputImage(fromIdx, toIdx)
+    }
+    resetImageDrag()
+  }
+
+  const handleTouchStart = (e: TouchEvent<HTMLDivElement>) => {
+    const touch = e.touches[0]
+    if (isMaskTarget) {
+      imageTouchDragRef.current = { index: idx, startX: touch.clientX, startY: touch.clientY, moved: false }
+      return
+    }
+    imageDragIndexRef.current = idx
+    imageTouchDragRef.current = { index: idx, startX: touch.clientX, startY: touch.clientY, moved: false }
+    setTouchDragPreview(null)
+  }
+
+  const handleTouchMove = (e: TouchEvent<HTMLDivElement>) => {
+    const touch = e.touches[0]
+    const touchDrag = imageTouchDragRef.current
+    if (touchDrag.index === null) return
+
+    if (isMaskTarget) {
+      if (Math.abs(touch.clientX - touchDrag.startX) > 6 || Math.abs(touch.clientY - touchDrag.startY) > 6) {
+        e.preventDefault()
+        showImageHintUntilRelease(img.id)
+      }
+      return
+    }
+
+    touchDrag.moved = true
+    clearImageHintTimer()
+    setImageHintId(null)
+    suppressImageClickRef.current = true
+    e.preventDefault()
+    setImageDragIndex(touchDrag.index)
+    setTouchDragPreview({ src: displaySrc, x: touch.clientX, y: touch.clientY })
+    const dropIndex = getTouchDropIndex(touch)
+    setImageDragTarget(dropIndex, touch.clientX)
+  }
+
+  const handleTouchEnd = (e: TouchEvent<HTMLDivElement>) => {
+    const touchDrag = imageTouchDragRef.current
+    clearImageHintTimer()
+    if (touchDrag.index !== null && imageDragOverIndexRef.current !== null) {
+      e.preventDefault()
+      moveInputImage(touchDrag.index, imageDragOverIndexRef.current)
+      window.setTimeout(() => {
+        suppressImageClickRef.current = false
+      }, 0)
+    }
+    resetImageDrag()
+    hideLockedImageHint()
+  }
+
+  const handleTouchCancel = () => {
+    suppressImageClickRef.current = false
+    hideLockedImageHint()
+    resetImageDrag()
+  }
+
+  return {
+    handleDragStart,
+    handleDragOver,
+    handleDrop,
+    handleTouchCancel,
+    handleTouchEnd,
+    handleTouchMove,
+    handleTouchStart,
   }
 }

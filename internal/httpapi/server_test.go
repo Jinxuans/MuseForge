@@ -324,15 +324,15 @@ func TestV1TaskDTOFallsBackToParamsJSON(t *testing.T) {
 		"params_json": map[string]any{"size": "1024x1024", "n": float64(1)},
 	})
 
-	params, _ := dto["params"].(map[string]any)
+	params := dto.Params
 	if params == nil {
-		t.Fatalf("expected params object, got %T", dto["params"])
+		t.Fatalf("expected params object")
 	}
 	if size, _ := params["size"].(string); size != "1024x1024" {
 		t.Fatalf("size = %q, want 1024x1024", size)
 	}
-	if taskType, _ := dto["type"].(string); taskType != "image_generation" {
-		t.Fatalf("type = %q, want image_generation", taskType)
+	if dto.Type != "image_generation" {
+		t.Fatalf("type = %q, want image_generation", dto.Type)
 	}
 }
 
@@ -345,8 +345,8 @@ func TestV1AssetDTOUsesVisibilityWhenPresent(t *testing.T) {
 		"visibility": "unlisted",
 	})
 
-	if visibility, _ := dto["visibility"].(string); visibility != "unlisted" {
-		t.Fatalf("visibility = %q, want unlisted", visibility)
+	if dto.Visibility != "unlisted" {
+		t.Fatalf("visibility = %q, want unlisted", dto.Visibility)
 	}
 }
 
@@ -358,8 +358,8 @@ func TestV1AssetDTODefaultsVisibilityToPrivate(t *testing.T) {
 		"mime":       "image/png",
 	})
 
-	if visibility, _ := dto["visibility"].(string); visibility != "private" {
-		t.Fatalf("visibility = %q, want private", visibility)
+	if dto.Visibility != "private" {
+		t.Fatalf("visibility = %q, want private", dto.Visibility)
 	}
 }
 
@@ -372,9 +372,9 @@ func TestV1AssetDTOIncludesMetadata(t *testing.T) {
 		"metadata_json": map[string]any{"revised_prompt": "rewritten prompt"},
 	})
 
-	metadata, _ := dto["metadata"].(map[string]any)
+	metadata := dto.Metadata
 	if metadata == nil {
-		t.Fatalf("expected metadata object, got %T", dto["metadata"])
+		t.Fatalf("expected metadata object")
 	}
 	if revisedPrompt, _ := metadata["revised_prompt"].(string); revisedPrompt != "rewritten prompt" {
 		t.Fatalf("revised_prompt = %q, want rewritten prompt", revisedPrompt)

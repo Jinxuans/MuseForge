@@ -188,20 +188,6 @@ func optionalPayloadJSON(payload map[string]any, keys ...string) (json.RawMessag
 	return nil, false, true
 }
 
-func optionalStringPointer(value string, ok bool) *string {
-	if !ok {
-		return nil
-	}
-	return &value
-}
-
-func optionalJSONPointer(value json.RawMessage, ok bool) *json.RawMessage {
-	if !ok {
-		return nil
-	}
-	return &value
-}
-
 func firstRawJSON(values ...json.RawMessage) json.RawMessage {
 	for _, value := range values {
 		if len(value) > 0 && strings.TrimSpace(string(value)) != "" {

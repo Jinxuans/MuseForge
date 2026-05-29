@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-
-	"museforge/internal/tasks"
 )
 
 type captureResponseWriter struct {
@@ -112,94 +110,6 @@ func v1DataFromHandlerPayload(payload map[string]any) any {
 		return map[string]any{"items": items, "provider_profiles": items, "nextCursor": nil}
 	}
 	return payload
-}
-
-func v1TaskDTO(task map[string]any) map[string]any {
-	params := objectValue(task["params"])
-	if len(params) == 0 {
-		params = objectValue(task["params_json"])
-	}
-	assets := arrayValue(task["assets"])
-	outputAssets := make([]any, 0, len(assets))
-	for _, item := range assets {
-		if asset, ok := item.(map[string]any); ok {
-			outputAssets = append(outputAssets, v1AssetDTO(asset))
-		}
-	}
-	return map[string]any{
-		"id":                      task["id"],
-		"type":                    v1TaskType(stringValue(task["type"])),
-		"status":                  task["status"],
-		"prompt":                  task["prompt"],
-		"model":                   task["model"],
-		"providerBaseUrlSnapshot": task["provider_base_url_snapshot"],
-		"params":                  params,
-		"inputAssets":             []any{},
-		"outputAssets":            outputAssets,
-		"assets":                  outputAssets,
-		"error":                   nullableStringValue(task["error"]),
-		"lastError":               nullableStringValue(task["last_error"]),
-		"attemptCount":            numberValue(task["attempt_count"]),
-		"maxAttempts":             numberValue(task["max_attempts"]),
-		"nextRunAt":               nullableStringValue(task["next_run_at"]),
-		"createdAt":               task["created_at"],
-		"startedAt":               nullableStringValue(task["started_at"]),
-		"completedAt":             nullableStringValue(task["completed_at"]),
-		"projectId":               nilString(),
-		"owner":                   map[string]any{"type": "anonymous", "id": "current"},
-	}
-}
-
-func v1AssetDTO(asset map[string]any) map[string]any {
-	metadata := objectValue(asset["metadata"])
-	if len(metadata) == 0 {
-		metadata = objectValue(asset["metadata_json"])
-	}
-	return map[string]any{
-		"id":           asset["id"],
-		"taskId":       asset["task_id"],
-		"taskType":     asset["task_type"],
-		"projectId":    nullableStringValue(asset["project_id"]),
-		"kind":         stringValueDefault(asset["kind"], "output"),
-		"prompt":       asset["prompt"],
-		"storageKey":   asset["storage_key"],
-		"publicUrl":    asset["public_url"],
-		"thumbnailUrl": nilString(),
-		"mime":         asset["mime"],
-		"width":        numberValue(asset["width"]),
-		"height":       numberValue(asset["height"]),
-		"sizeBytes":    numberValue(asset["size_bytes"]),
-		"sha256":       asset["sha256"],
-		"visibility":   stringValueDefault(asset["visibility"], "private"),
-		"metadata":     metadata,
-		"createdAt":    asset["created_at"],
-	}
-}
-
-func v1ProviderProfileDTO(profile map[string]any) map[string]any {
-	return map[string]any{
-		"id":             profile["id"],
-		"name":           profile["name"],
-		"type":           profile["type"],
-		"baseUrl":        profile["base_url"],
-		"apiKeyHint":     profile["api_key_hint"],
-		"model":          profile["model"],
-		"apiMode":        profile["api_mode"],
-		"providerConfig": objectValue(profile["provider_config_json"]),
-		"createdAt":      profile["created_at"],
-		"deletedAt":      nullableStringValue(profile["deleted_at"]),
-	}
-}
-
-func v1TaskType(taskType string) string {
-	switch taskType {
-	case tasks.TypeGeneration:
-		return "image_generation"
-	case tasks.TypeEdit:
-		return "image_edit"
-	default:
-		return taskType
-	}
 }
 
 func objectValue(value any) map[string]any {

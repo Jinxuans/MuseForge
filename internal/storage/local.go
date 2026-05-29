@@ -21,6 +21,8 @@ type Local struct {
 	dataDir string
 }
 
+const maxUploadReadBytes = 100 << 20
+
 type SavedFile struct {
 	StorageKey string
 	PublicURL  string
@@ -91,11 +93,11 @@ func (s *Local) SaveUpload(ctx context.Context, taskID string, name string, file
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(io.LimitReader(file, 100<<20))
+	data, err := io.ReadAll(io.LimitReader(file, maxUploadReadBytes))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) == 100<<20 {
+	if len(data) == maxUploadReadBytes {
 		return nil, fmt.Errorf("upload %s is too large", fileHeader.Filename)
 	}
 

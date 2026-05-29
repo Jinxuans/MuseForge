@@ -1,6 +1,6 @@
 import type { TaskRecord } from '../../types'
 import { ActualValueBadge } from '../../lib/paramDisplay'
-import { CopyIcon } from '../icons'
+import { CopyIcon } from '../../shared/ui/icons'
 
 type TaskPromptSectionProps = {
   task: TaskRecord

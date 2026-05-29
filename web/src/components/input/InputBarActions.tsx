@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react'
+import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import { PlusIcon } from '../../shared/ui/icons'
 import { ButtonTooltip } from './InputBarParts'
 
 interface InputBarActionsProps {
@@ -24,6 +25,41 @@ interface InputBarActionsProps {
   onCameraUpload: () => void
   onFileUpload: () => void
   onSubmit: () => void
+}
+
+type TooltipActionButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+  after?: ReactNode
+  buttonClassName: string
+  children: ReactNode
+  onHoverChange: (hovered: boolean) => void
+  tooltipText: ReactNode
+  tooltipVisible: boolean
+  wrapperClassName?: string
+}
+
+function TooltipActionButton({
+  after,
+  buttonClassName,
+  children,
+  onHoverChange,
+  tooltipText,
+  tooltipVisible,
+  wrapperClassName = 'relative',
+  ...buttonProps
+}: TooltipActionButtonProps) {
+  return (
+    <div
+      className={wrapperClassName}
+      onMouseEnter={() => onHoverChange(true)}
+      onMouseLeave={() => onHoverChange(false)}
+    >
+      <ButtonTooltip visible={tooltipVisible} text={tooltipText} />
+      <button {...buttonProps} className={buttonClassName}>
+        {children}
+      </button>
+      {after}
+    </div>
+  )
 }
 
 function SubmitIcon({ mobile = false }: { mobile?: boolean }) {
@@ -84,37 +120,29 @@ export default function InputBarActions({
         {desktopParams}
 
         <div className="flex gap-2 flex-shrink-0 mb-0.5">
-          <div
-            className="relative"
-            onMouseEnter={() => onAttachHoverChange(true)}
-            onMouseLeave={() => onAttachHoverChange(false)}
+          <TooltipActionButton
+            onClick={onDesktopUpload}
+            buttonClassName={`p-2.5 rounded-xl transition-all shadow-sm ${uploadButtonClass} ${atImageLimit ? '' : 'hover:shadow'}`}
+            aria-label={uploadImageTooltipText}
+            onHoverChange={onAttachHoverChange}
+            tooltipText={uploadImageTooltipText}
+            tooltipVisible={attachHover}
           >
-            <ButtonTooltip visible={attachHover} text={uploadImageTooltipText} />
-            <button
-              onClick={onDesktopUpload}
-              className={`p-2.5 rounded-xl transition-all shadow-sm ${uploadButtonClass} ${atImageLimit ? '' : 'hover:shadow'}`}
-              aria-label={uploadImageTooltipText}
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-              </svg>
-            </button>
-          </div>
-          <div
-            className="relative"
-            onMouseEnter={() => onSubmitHoverChange(true)}
-            onMouseLeave={() => onSubmitHoverChange(false)}
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+            </svg>
+          </TooltipActionButton>
+          <TooltipActionButton
+            onClick={onSubmit}
+            disabled={submitDisabled}
+            buttonClassName={`p-2.5 rounded-xl transition-all shadow-sm hover:shadow ${submitButtonClass}`}
+            aria-label={submitButtonAriaLabel}
+            onHoverChange={onSubmitHoverChange}
+            tooltipText={submitTooltipText}
+            tooltipVisible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover}
           >
-            <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover} text={submitTooltipText} />
-            <button
-              onClick={onSubmit}
-              disabled={submitDisabled}
-              className={`p-2.5 rounded-xl transition-all shadow-sm hover:shadow ${submitButtonClass}`}
-              aria-label={submitButtonAriaLabel}
-            >
-              {activeAgentIsRunning ? <StopIcon /> : <SubmitIcon />}
-            </button>
-          </div>
+            {activeAgentIsRunning ? <StopIcon /> : <SubmitIcon />}
+          </TooltipActionButton>
         </div>
       </div>
 
@@ -127,28 +155,14 @@ export default function InputBarActions({
         </div>
 
         <div className="flex items-center gap-2">
-          <div
-            className="relative"
-            onMouseEnter={() => onAttachHoverChange(true)}
-            onMouseLeave={() => onAttachHoverChange(false)}
-          >
-            <ButtonTooltip visible={attachHover} text={uploadImageTooltipText} />
-            <button
-              onClick={onToggleMobileUploadMenu}
-              className={`p-2.5 rounded-xl transition-all shadow-sm flex-shrink-0 ${uploadButtonClass}`}
-              aria-label={uploadImageTooltipText}
-            >
-              <svg
-                className={`w-5 h-5 transition-transform duration-200 ${showMobileUploadMenu ? 'rotate-90' : ''}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-            </button>
-
-            {showMobileUploadMenu && (
+          <TooltipActionButton
+            onClick={onToggleMobileUploadMenu}
+            buttonClassName={`p-2.5 rounded-xl transition-all shadow-sm flex-shrink-0 ${uploadButtonClass}`}
+            aria-label={uploadImageTooltipText}
+            onHoverChange={onAttachHoverChange}
+            tooltipText={uploadImageTooltipText}
+            tooltipVisible={attachHover}
+            after={showMobileUploadMenu && (
               <>
                 <div
                   className="fixed inset-0 z-40"
@@ -177,23 +191,22 @@ export default function InputBarActions({
                 </div>
               </>
             )}
-          </div>
-          <div
-            className="relative flex-1"
-            onMouseEnter={() => onSubmitHoverChange(true)}
-            onMouseLeave={() => onSubmitHoverChange(false)}
           >
-            <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover} text={submitTooltipText} />
-            <button
-              onClick={onSubmit}
-              disabled={submitDisabled}
-              aria-label={submitButtonAriaLabel}
-              className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm ${submitButtonClass}`}
-            >
-              {activeAgentIsRunning ? <StopIcon mobile /> : <SubmitIcon mobile />}
-              {activeAgentIsRunning ? '停止生成' : hasMaskDraft ? '遮罩编辑' : '生成图像'}
-            </button>
-          </div>
+            <PlusIcon className={`w-5 h-5 transition-transform duration-200 ${showMobileUploadMenu ? 'rotate-90' : ''}`} />
+          </TooltipActionButton>
+          <TooltipActionButton
+            onClick={onSubmit}
+            disabled={submitDisabled}
+            aria-label={submitButtonAriaLabel}
+            buttonClassName={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm ${submitButtonClass}`}
+            wrapperClassName="relative flex-1"
+            onHoverChange={onSubmitHoverChange}
+            tooltipText={submitTooltipText}
+            tooltipVisible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover}
+          >
+            {activeAgentIsRunning ? <StopIcon mobile /> : <SubmitIcon mobile />}
+            {activeAgentIsRunning ? '停止生成' : hasMaskDraft ? '遮罩编辑' : '生成图像'}
+          </TooltipActionButton>
         </div>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from 'react'
+import { UNCATEGORIZED_CATEGORY_ID } from '../../lib/categories'
 import { downloadImageIds, formatExportFileTime } from '../../lib/downloadImages'
 import { moveTasksToTrash, removeMultipleTasks, restoreTasksFromTrash, updateTaskInStore, useStore } from '../../store'
 
@@ -27,8 +28,8 @@ export function useBatchSelectionToolbar() {
       } else if (task.deletedAt) {
         return false
       }
-      if (activeCategoryId === '__uncategorized__' && task.categoryId) return false
-      if (activeCategoryId !== 'all' && activeCategoryId !== '__uncategorized__' && task.categoryId !== activeCategoryId) return false
+      if (activeCategoryId === UNCATEGORIZED_CATEGORY_ID && task.categoryId) return false
+      if (activeCategoryId !== 'all' && activeCategoryId !== UNCATEGORIZED_CATEGORY_ID && task.categoryId !== activeCategoryId) return false
       const matchStatus = filterStatus === 'all' || task.status === filterStatus
       if (!matchStatus) return false
 

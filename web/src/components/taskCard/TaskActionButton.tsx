@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import ViewportTooltip from '../ViewportTooltip'
+import ViewportTooltip from '../../shared/ui/ViewportTooltip'
 
 interface TaskActionButtonProps {
   tooltip: string

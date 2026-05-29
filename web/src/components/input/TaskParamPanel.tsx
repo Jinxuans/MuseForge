@@ -1,6 +1,6 @@
 import type { KeyboardEvent, WheelEvent } from 'react'
 import type { TaskParams } from '../../types'
-import Select from '../Select'
+import Select from '../../shared/ui/Select'
 import { ButtonTooltip } from './InputBarParts'
 
 type HintController = {

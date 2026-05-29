@@ -1,10 +1,11 @@
 import type { AppSettings, TaskRecord } from '../types'
 import { getActiveApiProfile } from '../lib/apiProfiles'
 import { backendAssetToStoredServerAsset, deleteCachedServerAsset, fetchBackendAssetAsDataUrl, getAssetPublicUrl, listBackendAssetsPage, type ListAssetsInput } from '../lib/backendAssets'
-import { backendTaskToTaskRecord, getTaskOutputAssets, listBackendTasksPage, mapServerTaskStatus, type CreativeTaskDTO } from '../lib/backendTasks'
+import { backendTaskToTaskRecord, getTaskOutputAssets, listBackendTasksPage, type CreativeTaskDTO } from '../lib/backendTasks'
+import { mapServerTaskStatus } from '../lib/backendTaskStatus'
 import { deleteServerAsset, getAllServerAssets, putServerAsset, storeImage } from '../lib/db'
-import { getBackendCapabilitiesCached, mergeBackendTaskRecord } from '../store/backendTaskExecution'
-import { cacheImage, scheduleThumbnailBackfill } from '../store/imageCache'
+import { getBackendCapabilitiesCached, mergeBackendTaskRecord } from '../store/tasks/backendTaskExecution'
+import { cacheImage, scheduleThumbnailBackfill } from '../store/images/imageCache'
 
 export type BackendSyncContext = {
   settings: AppSettings

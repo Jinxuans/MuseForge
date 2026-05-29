@@ -6,6 +6,8 @@ MuseForge 是一个开源 AI 创作平台，当前以 TokFlux（原 TokenFlux）
 
 源码层面前后端分离，部署时可由 Go 二进制托管前端构建产物。`web/dist` 是本地构建产物，不提交到仓库；本地开发时可以先启动 Go API，再由 Vite 托管前端：
 
+项目结构约定见 [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md)。
+
 - 页面入口：`http://127.0.0.1:5000/`
 - 健康检查：`http://127.0.0.1:5000/health`
 - 图片生成：`POST /v1/images/generations` 或 `POST /images/generations`

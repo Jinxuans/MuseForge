@@ -1,8 +1,8 @@
 import type { AgentConversation, InputImage, TaskRecord } from '../types'
-import type { AgentInputDraft } from '../store/agentInputDrafts'
-import { isEmptyAgentInputDraft } from '../store/agentInputDrafts'
-import { addTaskReferencedImageIds } from '../store/imageReferences'
-import { cacheImage, scheduleThumbnailBackfill } from '../store/imageCache'
+import type { AgentInputDraft } from '../store/agent/agentInputDrafts'
+import { isEmptyAgentInputDraft } from '../store/agent/agentInputDrafts'
+import { addTaskReferencedImageIds } from '../store/images/imageReferences'
+import { cacheImage, scheduleThumbnailBackfill } from '../store/images/imageCache'
 import { getAllImageIds, getImage, deleteImage } from '../lib/db'
 import { remapImageMentionsForOrder } from '../lib/promptImageMentions'
 

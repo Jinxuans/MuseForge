@@ -3,7 +3,7 @@ import { useStore, addImageFromUrl, ensureImageCached } from '../store'
 import { copyImageSourceToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { downloadImageIds, formatExportFileTime } from '../lib/downloadImages'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
-import { CopyIcon, DownloadIcon, EditIcon } from './icons'
+import { CopyIcon, DownloadIcon, EditIcon } from '../shared/ui/icons'
 
 export default function ImageContextMenu() {
   const [menuInfo, setMenuInfo] = useState<{ src: string; imageId?: string; outputImageIds: string[]; x: number; y: number } | null>(null)

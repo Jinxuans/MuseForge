@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { moveTasksToCategory, useStore } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
-import { CloseIcon, PlusIcon } from './icons'
+import { CloseIcon, PlusIcon } from '../shared/ui/icons'
 
 export default function MoveCategoryModal() {
   const moveCategoryTaskIds = useStore((s) => s.moveCategoryTaskIds)

@@ -15,6 +15,7 @@ import {
   MIME_MAP,
   normalizeBase64Image,
 } from './imageApiShared'
+import { attachErrorDebugPayload } from './errorDebugPayload'
 
 const DEFAULT_FAL_IMAGE_SIZE = { width: 1360, height: 1024 }
 
@@ -116,7 +117,7 @@ async function parseFalImageResults(payload: FalApiResponse, fallbackMime: strin
     }
   } catch (err) {
     if (rawImageUrls.length > 0 && err instanceof Error) {
-      (err as any).rawImageUrls = rawImageUrls
+      attachErrorDebugPayload(err, { rawImageUrls })
     }
     throw err
   }
@@ -128,7 +129,7 @@ async function parseFalImageResults(payload: FalApiResponse, fallbackMime: strin
         : 'fal.ai 未返回可用图片数据',
     )
     if (customBaseUrlLabel) {
-      ;(err as any).rawResponsePayload = JSON.stringify(payload, null, 2)
+      attachErrorDebugPayload(err, { rawResponsePayload: JSON.stringify(payload, null, 2) })
     }
     throw err
   }

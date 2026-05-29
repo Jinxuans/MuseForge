@@ -3,167 +3,44 @@ package tasks
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"net/textproto"
-	"net/url"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
-	"time"
 
 	"museforge/internal/redact"
 	"museforge/internal/storage"
 )
 
-const imageDownloadTimeout = 30 * time.Second
-
 type Worker struct {
-	repo          *Repository
-	store         *storage.Local
-	client        *http.Client
-	concurrency   int
-	defaultAPIKey string
-	wake          chan struct{}
+	repo        *Repository
+	store       *storage.Local
+	upstream    *upstreamImageClient
+	assets      *assetSaver
+	concurrency int
+	wake        chan struct{}
 }
 
 func NewWorker(repo *Repository, store *storage.Local, concurrency int, defaultAPIKey string) *Worker {
 	if concurrency <= 0 {
 		concurrency = 1
 	}
+	upstream := newUpstreamImageClient(defaultAPIKey)
 	return &Worker{
-		repo:          repo,
-		store:         store,
-		concurrency:   concurrency,
-		defaultAPIKey: defaultAPIKey,
-		wake:          make(chan struct{}, 1),
-		client: &http.Client{
-			Timeout: 300 * time.Second,
-		},
+		repo:        repo,
+		store:       store,
+		concurrency: concurrency,
+		upstream:    upstream,
+		assets:      newAssetSaver(repo, store, upstream),
+		wake:        make(chan struct{}, 1),
 	}
-}
-
-func (w *Worker) Start(ctx context.Context) {
-	var wg sync.WaitGroup
-	for i := 0; i < w.concurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			w.loop(ctx)
-		}()
-	}
-	go func() {
-		<-ctx.Done()
-		wg.Wait()
-	}()
-}
-
-func (w *Worker) Wake() {
-	select {
-	case w.wake <- struct{}{}:
-	default:
-	}
-}
-
-func (w *Worker) loop(ctx context.Context) {
-	timer := time.NewTimer(0)
-	defer timer.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-w.wake:
-		case <-timer.C:
-		}
-
-		for {
-			work, err := w.repo.ClaimNextQueued(ctx)
-			if err != nil {
-				sleep(timer, 2*time.Second)
-				break
-			}
-			if work == nil {
-				sleep(timer, 2*time.Second)
-				break
-			}
-			w.runOne(ctx, work)
-		}
-	}
-}
-
-func (w *Worker) runOne(ctx context.Context, work *TaskWork) {
-	startedAt := time.Now()
-	defer func() {
-		if rec := recover(); rec != nil {
-			message := sanitizeError(fmt.Errorf("worker panic: %v", rec))
-			if err := w.repo.MarkFailed(ctx, work.ID, message); err != nil {
-				slog.Error("task panic mark failed error", "task_id", work.ID, "error", err)
-			}
-			slog.Error("task worker panic", "task_id", work.ID, "task_type", work.Type, "duration_ms", time.Since(startedAt).Milliseconds(), "panic", rec)
-		}
-	}()
-	slog.Info("task started", "task_id", work.ID, "task_type", work.Type, "model", work.Model, "upstream_base_url", redact.String(work.BaseURL))
-	var err error
-	switch work.Type {
-	case TypeGeneration:
-		err = w.executeGeneration(ctx, work)
-	case TypeEdit:
-		err = w.executeEdit(ctx, work)
-	default:
-		err = fmt.Errorf("unsupported task type %q", work.Type)
-	}
-	if err != nil {
-		sanitized := sanitizeError(err)
-		if isRetryable(err) {
-			attempts, maxAttempts, attemptErr := w.repo.Attempts(ctx, work.ID)
-			if attemptErr == nil && attempts < maxAttempts {
-				_ = w.repo.RequeueRetry(ctx, work.ID, sanitized, 0)
-				slog.Warn("task retry queued",
-					"task_id", work.ID,
-					"task_type", work.Type,
-					"attempt", attempts,
-					"max_attempts", maxAttempts,
-					"duration_ms", time.Since(startedAt).Milliseconds(),
-					"error", sanitized,
-				)
-				w.Wake()
-				return
-			}
-		}
-		if markErr := w.repo.MarkFailed(ctx, work.ID, sanitized); markErr != nil {
-			slog.Error("task mark failed error", "task_id", work.ID, "error", markErr)
-		}
-		if cleanupErr := w.store.DeleteTaskUploads(work.ID); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
-			slog.Warn("task upload cleanup failed", "task_id", work.ID, "error", cleanupErr)
-		}
-		slog.Error("task failed",
-			"task_id", work.ID,
-			"task_type", work.Type,
-			"duration_ms", time.Since(startedAt).Milliseconds(),
-			"error", sanitized,
-		)
-		return
-	}
-	if err := w.repo.MarkSucceeded(ctx, work.ID); err != nil {
-		slog.Error("task mark succeeded error", "task_id", work.ID, "error", err)
-		return
-	}
-	if cleanupErr := w.store.DeleteTaskUploads(work.ID); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
-		slog.Warn("task upload cleanup failed", "task_id", work.ID, "error", cleanupErr)
-	}
-	slog.Info("task succeeded", "task_id", work.ID, "task_type", work.Type, "duration_ms", time.Since(startedAt).Milliseconds())
 }
 
 func (w *Worker) executeGeneration(ctx context.Context, work *TaskWork) error {
@@ -184,7 +61,7 @@ func (w *Worker) executeGeneration(ctx context.Context, work *TaskWork) error {
 	if err != nil {
 		return err
 	}
-	savedCount, err := w.saveImageResponse(ctx, work.ID, 0, requestedImages, respBody)
+	savedCount, err := w.assets.saveImageResponse(ctx, work.ID, 0, requestedImages, respBody)
 	if err != nil {
 		return err
 	}
@@ -195,7 +72,7 @@ func (w *Worker) executeGeneration(ctx context.Context, work *TaskWork) error {
 		if err != nil {
 			return err
 		}
-		count, err := w.saveImageResponse(ctx, work.ID, savedCount, requestedImages-savedCount, respBody)
+		count, err := w.assets.saveImageResponse(ctx, work.ID, savedCount, requestedImages-savedCount, respBody)
 		if err != nil {
 			return err
 		}
@@ -208,159 +85,7 @@ func (w *Worker) executeGeneration(ctx context.Context, work *TaskWork) error {
 }
 
 func (w *Worker) callGenerationUpstream(ctx context.Context, work *TaskWork, params map[string]any) ([]byte, error) {
-	body, err := json.Marshal(params)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(work.BaseURL, "/")+"/images/generations", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	auth := normalizeBearerToken(work.APIKey)
-	if auth == "" {
-		auth = normalizeBearerToken(w.defaultAPIKey)
-	}
-	if auth == "" {
-		return nil, errors.New("missing API key for async task")
-	}
-	req.Header.Set("Authorization", auth)
-
-	resp, err := w.client.Do(req)
-	if err != nil {
-		return nil, retryableError{err: err}
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= http.StatusBadRequest {
-		return nil, upstreamError{status: resp.StatusCode, message: summarizeUpstreamError(respBody)}
-	}
-	return respBody, nil
-}
-
-func (w *Worker) saveImageResponse(ctx context.Context, taskID string, startIndex int, maxImages int, respBody []byte) (int, error) {
-	var decoded struct {
-		Data []struct {
-			B64JSON       string `json:"b64_json"`
-			URL           string `json:"url"`
-			RevisedPrompt string `json:"revised_prompt"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(respBody, &decoded); err != nil {
-		return 0, err
-	}
-	if len(decoded.Data) == 0 {
-		return 0, errors.New("upstream response did not contain images")
-	}
-	if maxImages > 0 && len(decoded.Data) > maxImages {
-		decoded.Data = decoded.Data[:maxImages]
-	}
-
-	for i, image := range decoded.Data {
-		asset, err := w.assetFromImageResponse(ctx, taskID, fmt.Sprintf("%d", startIndex+i), image.B64JSON, image.URL, image.RevisedPrompt)
-		if err != nil {
-			return i, err
-		}
-		if err := w.repo.CreateAsset(ctx, asset); err != nil {
-			return i, err
-		}
-		slog.Info("asset created", "task_id", taskID, "asset_id", asset.ID, "storage_key", asset.StorageKey, "mime", asset.MIME, "size_bytes", asset.SizeBytes)
-	}
-	return len(decoded.Data), nil
-}
-
-func (w *Worker) assetFromImageResponse(ctx context.Context, taskID string, name string, b64 string, imageURL string, revisedPrompt string) (Asset, error) {
-	if b64 != "" {
-		data, err := base64.StdEncoding.DecodeString(b64)
-		if err != nil {
-			return Asset{}, err
-		}
-		return w.localImageAsset(ctx, taskID, name, data, revisedPrompt)
-	}
-	if imageURL == "" {
-		return Asset{}, errors.New("image response missing b64_json and url")
-	}
-
-	downloadCtx, cancel := context.WithTimeout(ctx, imageDownloadTimeout)
-	data, err := w.imageBytes(downloadCtx, "", imageURL)
-	cancel()
-	if err == nil {
-		return w.localImageAsset(ctx, taskID, name, data, revisedPrompt)
-	}
-	if ctx.Err() != nil {
-		return Asset{}, ctx.Err()
-	}
-
-	slog.Warn("image download failed; storing remote asset URL", "task_id", taskID, "url", redact.String(imageURL), "error", sanitizeError(err))
-	return remoteImageAsset(taskID, name, imageURL, revisedPrompt), nil
-}
-
-func (w *Worker) localImageAsset(ctx context.Context, taskID string, name string, data []byte, revisedPrompt string) (Asset, error) {
-	saved, err := w.store.SaveResult(ctx, taskID, name, data)
-	if err != nil {
-		return Asset{}, err
-	}
-	return Asset{
-		ID:         newID(),
-		TaskID:     taskID,
-		StorageKey: saved.StorageKey,
-		PublicURL:  saved.PublicURL,
-		MIME:       saved.MIME,
-		Width:      saved.Width,
-		Height:     saved.Height,
-		SizeBytes:  saved.SizeBytes,
-		SHA256:     saved.SHA256,
-		Metadata:   assetMetadataForImage(revisedPrompt),
-	}, nil
-}
-
-func remoteImageAsset(taskID string, name string, imageURL string, revisedPrompt string) Asset {
-	sum := sha256.Sum256([]byte(imageURL))
-	return Asset{
-		ID:         newID(),
-		TaskID:     taskID,
-		StorageKey: filepath.ToSlash(filepath.Join("external", taskID, name)),
-		PublicURL:  imageURL,
-		MIME:       mimeForImageURL(imageURL),
-		SizeBytes:  0,
-		SHA256:     hex.EncodeToString(sum[:]),
-		Metadata:   assetMetadataForImage(revisedPrompt),
-	}
-}
-
-func mimeForImageURL(imageURL string) string {
-	parsed, err := url.Parse(imageURL)
-	pathValue := imageURL
-	if err == nil {
-		pathValue = parsed.Path
-	}
-	switch strings.ToLower(filepath.Ext(pathValue)) {
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".webp":
-		return "image/webp"
-	case ".png":
-		return "image/png"
-	default:
-		return "image/png"
-	}
-}
-
-func assetMetadataForImage(revisedPrompt string) json.RawMessage {
-	revisedPrompt = strings.TrimSpace(revisedPrompt)
-	if revisedPrompt == "" {
-		return nil
-	}
-	payload, err := json.Marshal(map[string]string{"revised_prompt": revisedPrompt})
-	if err != nil {
-		return nil
-	}
-	return payload
+	return w.upstream.postJSON(ctx, work.BaseURL, work.APIKey, "/images/generations", params)
 }
 
 type storedUpload struct {
@@ -413,39 +138,15 @@ func (w *Worker) executeEdit(ctx context.Context, work *TaskWork) error {
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(work.BaseURL, "/")+"/images/edits", body)
+	respBody, err := w.upstream.postMultipart(ctx, work.BaseURL, work.APIKey, "/images/edits", body, writer.FormDataContentType())
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	auth := normalizeBearerToken(work.APIKey)
-	if auth == "" {
-		auth = normalizeBearerToken(w.defaultAPIKey)
-	}
-	if auth == "" {
-		return errors.New("missing API key for async task")
-	}
-	req.Header.Set("Authorization", auth)
-
-	resp, err := w.client.Do(req)
-	if err != nil {
-		return retryableError{err: err}
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode >= http.StatusBadRequest {
-		return upstreamError{status: resp.StatusCode, message: summarizeUpstreamError(respBody)}
-	}
-	_, err = w.saveImageResponse(ctx, work.ID, 0, 0, respBody)
+	_, err = w.assets.saveImageResponse(ctx, work.ID, 0, 0, respBody)
 	return err
 }
 
 func requestedImageCount(params map[string]any) int {
-	const maxImagesPerTask = 10
 	count := intFromAny(params["n"])
 	if count < 1 {
 		return 1
@@ -535,38 +236,6 @@ func (w *Worker) writeStoredFile(writer *multipart.Writer, fieldName string, upl
 	}
 	_, err = io.Copy(part, file)
 	return err
-}
-
-func (w *Worker) imageBytes(ctx context.Context, b64 string, imageURL string) ([]byte, error) {
-	if b64 != "" {
-		return base64.StdEncoding.DecodeString(b64)
-	}
-	if imageURL == "" {
-		return nil, errors.New("image response missing b64_json and url")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := w.client.Do(req)
-	if err != nil {
-		return nil, retryableError{err: err}
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusBadRequest {
-		return nil, upstreamError{status: resp.StatusCode, message: fmt.Sprintf("image download HTTP %d", resp.StatusCode)}
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, 100<<20))
-}
-
-func sleep(timer *time.Timer, duration time.Duration) {
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
-	timer.Reset(duration)
 }
 
 func summarizeUpstreamError(body []byte) string {

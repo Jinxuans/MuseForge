@@ -1,6 +1,6 @@
 import type { KeyboardEvent, MouseEvent, PointerEvent, TouchEvent } from 'react'
 import type { AgentConversation } from '../../types'
-import { EditIcon, SidebarLeftIcon, TrashIcon } from '../icons'
+import { EditIcon, SidebarLeftIcon, TrashIcon } from '../../shared/ui/icons'
 import { AgentActionButton } from './AgentMessageParts'
 
 type AgentConversationSidebarProps = {

@@ -1,9 +1,11 @@
 import { backendRequest, buildQuery } from './backendClient'
-import type { AssetDTO } from './backendTasks'
+import { getAssetCreatedAt, getAssetPublicUrl, getAssetTaskId, type AssetDTO } from './backendAssetDto'
 import type { StoredServerAsset } from '../types'
 import { blobToDataUrl, fetchImageUrlAsDataUrl, isDataUrl } from './imageApiShared'
 
 const SERVER_ASSET_CACHE_NAME = 'museforge-server-assets-v1'
+
+export { getAssetCreatedAt, getAssetPublicUrl, getAssetTaskId } from './backendAssetDto'
 
 export interface ListAssetsInput {
   cursor?: string
@@ -22,20 +24,6 @@ export interface ListAssetsResult {
 export interface ListAssetsPageResult {
   items: AssetDTO[]
   nextCursor: string | null
-}
-
-export function getAssetPublicUrl(asset: AssetDTO): string {
-  return asset.publicUrl ?? asset.public_url ?? ''
-}
-
-export function getAssetTaskId(asset: AssetDTO): string | undefined {
-  return asset.taskId ?? asset.task_id
-}
-
-export function getAssetCreatedAt(asset: AssetDTO): number {
-  const value = asset.createdAt ?? asset.created_at
-  const timestamp = value ? Date.parse(value) : NaN
-  return Number.isFinite(timestamp) ? timestamp : Date.now()
 }
 
 export function backendAssetToStoredServerAsset(asset: AssetDTO, localImageId?: string | null): StoredServerAsset {

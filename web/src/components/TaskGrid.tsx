@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
 import { useStore, reuseConfig, editOutputs, moveTasksToTrash, removeTask } from '../store'
+import { UNCATEGORIZED_CATEGORY_ID } from '../lib/categories'
 import TaskCard from './TaskCard'
 
 export default function TaskGrid() {
@@ -41,8 +42,8 @@ export default function TaskGrid() {
       } else if (t.deletedAt) {
         return false
       }
-      if (activeCategoryId === '__uncategorized__' && t.categoryId) return false
-      if (activeCategoryId !== 'all' && activeCategoryId !== '__uncategorized__' && t.categoryId !== activeCategoryId) return false
+      if (activeCategoryId === UNCATEGORIZED_CATEGORY_ID && t.categoryId) return false
+      if (activeCategoryId !== 'all' && activeCategoryId !== UNCATEGORIZED_CATEGORY_ID && t.categoryId !== activeCategoryId) return false
       const matchStatus = filterStatus === 'all' || t.status === filterStatus
       if (!matchStatus) return false
       

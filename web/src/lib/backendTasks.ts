@@ -1,40 +1,16 @@
 import { DEFAULT_PARAMS, type ApiProfile, type TaskParams, type TaskRecord } from '../types'
+import { getAssetPublicUrl, type AssetDTO } from './backendAssetDto'
 import { backendRequest, buildQuery } from './backendClient'
-import { getAssetPublicUrl } from './backendAssets'
+import { getServerTaskErrorMessage, getServerTaskLastError, mapServerTaskStatus, type ServerTaskStatus } from './backendTaskStatus'
 
-export type ServerTaskStatus = 'draft' | 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled' | string
+export type { AssetDTO } from './backendAssetDto'
+export { getServerTaskErrorMessage, getServerTaskLastError, mapServerTaskStatus } from './backendTaskStatus'
+export type { ServerTaskStatus } from './backendTaskStatus'
 export type ServerTaskType = 'generation' | 'edit' | 'image_generation' | 'image_edit' | 'agent' | 'workflow' | string
 
 export interface ResourceOwnerDTO {
   type?: 'anonymous' | 'user' | string
   id?: string
-}
-
-export interface AssetDTO {
-  id: string
-  task_id?: string
-  taskId?: string
-  project_id?: string | null
-  projectId?: string | null
-  task_type?: string
-  taskType?: string
-  prompt?: string
-  storage_key?: string
-  storageKey?: string
-  public_url?: string
-  publicUrl?: string
-  thumbnailUrl?: string | null
-  mime: string
-  width?: number | null
-  height?: number | null
-  size_bytes?: number
-  sizeBytes?: number
-  sha256?: string
-  kind?: 'input' | 'output' | 'mask' | 'reference' | 'thumbnail' | string
-  visibility?: 'private' | 'unlisted' | 'public' | string
-  metadata?: Record<string, unknown>
-  created_at?: string
-  createdAt?: string
 }
 
 export interface CreativeTaskDTO {
@@ -112,12 +88,6 @@ function toServerParams(input: CreateGenerationTaskInput) {
   }
 }
 
-export function mapServerTaskStatus(status: ServerTaskStatus): TaskRecord['status'] {
-  if (status === 'succeeded') return 'done'
-  if (status === 'failed' || status === 'canceled') return 'error'
-  return 'running'
-}
-
 export function serverTaskParams(task: CreativeTaskDTO): Partial<TaskParams> {
   const params = task.params ?? task.params_json ?? {}
   return typeof params === 'object' && params ? params as Partial<TaskParams> : {}
@@ -188,8 +158,8 @@ export function backendTaskToTaskRecord(task: CreativeTaskDTO, options: {
     rawImageUrls: outputAssets.map(getAssetPublicUrl).filter(Boolean),
     revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
     status: mapServerTaskStatus(task.status),
-    error: task.error ?? task.lastError ?? task.last_error ?? null,
-    lastError: task.lastError ?? task.last_error ?? null,
+    error: getServerTaskErrorMessage(task),
+    lastError: getServerTaskLastError(task),
     attemptCount: task.attemptCount ?? task.attempt_count,
     maxAttempts: task.maxAttempts ?? task.max_attempts,
     createdAt,

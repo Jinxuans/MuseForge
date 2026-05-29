@@ -1,9 +1,9 @@
 import type { AgentConversation, CategoryConfig, InputImage, TaskRecord } from '../types'
-import type { AgentInputDraft } from '../store/agentInputDrafts'
-import { scrubAgentConversationsForDeletedTasks, scrubTaskRawResponsePayloadForDeletedTasks } from '../store/agentResponseOutput'
-import { addAgentReferencedImageIds, addInputDraftReferencedImageIds, addTaskReferencedImageIds } from '../store/imageReferences'
-import { deleteCachedImageAndThumbnail } from '../store/imageCache'
-import { applyTaskCategory, getExpiredTrashTaskIds, markTasksDeleted, restoreDeletedTasks } from '../store/taskDomain'
+import type { AgentInputDraft } from '../store/agent/agentInputDrafts'
+import { scrubAgentConversationsForDeletedTasks, scrubTaskRawResponsePayloadForDeletedTasks } from '../store/agent/agentResponseOutput'
+import { addAgentReferencedImageIds, addInputDraftReferencedImageIds, addTaskReferencedImageIds } from '../store/images/imageReferences'
+import { deleteCachedImageAndThumbnail } from '../store/images/imageCache'
+import { applyTaskCategory, getExpiredTrashTaskIds, markTasksDeleted, restoreDeletedTasks } from '../store/tasks/taskDomain'
 
 export type TaskCleanupContext = {
   tasks: TaskRecord[]

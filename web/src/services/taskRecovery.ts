@@ -3,8 +3,8 @@ import { getCustomProviderDefinition } from '../lib/apiProfiles'
 import { getFalErrorMessage, getFalQueuedImageResult } from '../lib/falAiImageApi'
 import { getCustomQueuedImageResult } from '../lib/openaiCompatibleImageApi'
 import { createOpenAITimeoutError, type TimeoutStreamingHintProfile } from '../store/errorMessages'
-import { createTaskErrorDebug, getRawErrorPayload } from '../store/taskErrorDebug'
-import { getTaskApiProfile, isRunningOpenAITask } from '../store/taskDomain'
+import { createTaskErrorDebug, getRawErrorPayload } from '../store/tasks/taskErrorDebug'
+import { getTaskApiProfile, isRunningOpenAITask } from '../store/tasks/taskDomain'
 
 const FAL_RECOVERY_POLL_MS = 10_000
 const CUSTOM_RECOVERY_POLL_MS = 10_000

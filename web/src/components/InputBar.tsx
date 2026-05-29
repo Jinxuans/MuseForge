@@ -3,7 +3,7 @@ import { useStore, submitTask, submitAgentMessage, stopAgentResponse } from '../
 import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
-import Select from './Select'
+import Select from '../shared/ui/Select'
 import SizePickerModal from './SizePickerModal'
 import { useIsMobile } from './input/InputBarParts'
 import BatchSelectionToolbar from './input/BatchSelectionToolbar'

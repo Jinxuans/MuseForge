@@ -1,4 +1,4 @@
-import { CopyIcon } from '../icons'
+import { CopyIcon } from '../../shared/ui/icons'
 
 type ReferenceImagesSectionProps = {
   show: boolean

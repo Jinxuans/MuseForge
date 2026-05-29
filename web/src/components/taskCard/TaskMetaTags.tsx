@@ -1,7 +1,7 @@
 import type { TaskRecord } from '../../types'
 import { DEFAULT_FAL_MODEL, DEFAULT_IMAGES_MODEL } from '../../lib/apiProfiles'
 import { ActualValueBadge, getParamDisplay } from '../../lib/paramDisplay'
-import { CodeIcon } from '../icons'
+import { CodeIcon } from '../../shared/ui/icons'
 
 interface TaskMetaTagsProps {
   task: TaskRecord

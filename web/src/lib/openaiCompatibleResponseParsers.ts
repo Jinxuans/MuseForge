@@ -14,6 +14,7 @@ import {
   isRecordValue,
   readJsonServerSentEvents,
 } from './apiStreamUtils'
+import { attachErrorDebugPayload } from './errorDebugPayload'
 
 function normalizeImageApiPayload(value: unknown): ImageApiResponse {
   if (Array.isArray(value)) return { data: value as ImageApiResponse['data'] }
@@ -29,7 +30,7 @@ export function parseResponsesImageResults(payload: ResponsesApiResponse, fallba
   const output = payload.output
   if (!Array.isArray(output) || !output.length) {
     const err = new Error('接口未返回图片数据')
-    ;(err as any).rawResponsePayload = JSON.stringify(payload, null, 2)
+    attachErrorDebugPayload(err, { rawResponsePayload: JSON.stringify(payload, null, 2) })
     throw err
   }
 
@@ -50,7 +51,7 @@ export function parseResponsesImageResults(payload: ResponsesApiResponse, fallba
 
   if (!results.length) {
     const err = new Error('接口没有返回可识别的图片数据，请查看原始响应内容确认服务商实际返回的数据结构。如果使用的是中转或兼容接口，建议创建并使用「自定义服务商」配置。')
-    ;(err as any).rawResponsePayload = JSON.stringify(payload, null, 2)
+    attachErrorDebugPayload(err, { rawResponsePayload: JSON.stringify(payload, null, 2) })
     throw err
   }
 
@@ -79,7 +80,7 @@ export async function parseImagesApiResponse(payload: ImageApiResponse, mime: st
   const data = payload.data
   if (!Array.isArray(data) || !data.length) {
     const err = new Error('接口没有返回图片数据，请查看原始响应内容确认服务商实际返回的数据结构。如果使用的是中转或兼容接口，建议创建并使用「自定义服务商」配置。')
-    ;(err as any).rawResponsePayload = JSON.stringify(payload, null, 2)
+    attachErrorDebugPayload(err, { rawResponsePayload: JSON.stringify(payload, null, 2) })
     throw err
   }
 
@@ -102,14 +103,14 @@ export async function parseImagesApiResponse(payload: ImageApiResponse, mime: st
     }
   } catch (err) {
     if (rawImageUrls.length > 0 && err instanceof Error) {
-      (err as any).rawImageUrls = rawImageUrls
+      attachErrorDebugPayload(err, { rawImageUrls })
     }
     throw err
   }
 
   if (!images.length) {
     const err = new Error('接口没有返回可识别的图片数据，请查看原始响应内容确认服务商实际返回的数据结构。如果使用的是中转或兼容接口，建议创建并使用「自定义服务商」配置。')
-    ;(err as any).rawResponsePayload = JSON.stringify(payload, null, 2)
+    attachErrorDebugPayload(err, { rawResponsePayload: JSON.stringify(payload, null, 2) })
     throw err
   }
 

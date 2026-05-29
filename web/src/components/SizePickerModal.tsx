@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { calculateImageSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
-import ViewportTooltip from './ViewportTooltip'
+import ViewportTooltip from '../shared/ui/ViewportTooltip'
 
 const TIERS: SizeTier[] = ['1K', '2K', '4K']
 const SIZE_LIMIT_TEXT = '由于模型限制，最终输出会自动规整到合法尺寸：\n宽高均为 16 的倍数，最大边长 3840px，宽高比不超过 3:1，总像素限制为 655360-8294400。'

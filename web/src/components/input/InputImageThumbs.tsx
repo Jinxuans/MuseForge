@@ -1,7 +1,8 @@
-import type { DragEvent, MutableRefObject, RefObject } from 'react'
+import type { RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import type { InputImage } from '../../types'
-import InputImageThumbItem, { type TouchDragPreview, type TouchDragState } from './InputImageThumbItem'
+import InputImageThumbItem from './InputImageThumbItem'
+import { type InputImageDragControls } from './useInputImageDrag'
 
 type InputImageThumbsProps = {
   inputImages: InputImage[]
@@ -10,28 +11,13 @@ type InputImageThumbsProps = {
   maskTargetImageId: string | null
   maskPreviewUrl: string
   imageHintId: string | null
-  imageDragIndex: number | null
-  imageDragOverIndex: number | null
-  touchDragPreview: TouchDragPreview
   isMobile: boolean
   textareaRef: RefObject<HTMLDivElement | null>
-  imageDragIndexRef: MutableRefObject<number | null>
-  imageTouchDragRef: MutableRefObject<TouchDragState>
-  imageDragOverIndexRef: MutableRefObject<number | null>
-  imageDragPreviewRef: MutableRefObject<HTMLElement | null>
-  suppressImageClickRef: MutableRefObject<boolean>
-  maskConflictNoticeShownRef: MutableRefObject<boolean>
-  setImageDragIndex: (idx: number | null) => void
-  setTouchDragPreview: (preview: TouchDragPreview) => void
   setImageHintId: (id: string | null) => void
   showImageHintUntilRelease: (id: string) => void
   hideImageHint: () => void
   hideLockedImageHint: () => void
   clearImageHintTimer: () => void
-  getTouchDropIndex: (touch: React.Touch) => number | null
-  getDataTransferDragIndex: (event: DragEvent<HTMLDivElement>) => number | null
-  setImageDragTarget: (idx: number | null, clientX?: number) => void
-  resetImageDrag: () => void
   moveInputImage: (fromIdx: number, toIdx: number) => void
   removeInputImage: (idx: number) => void
   onClearAll: () => void
@@ -40,7 +26,7 @@ type InputImageThumbsProps = {
   onOpenMaskEditor: (imageId: string) => void
   onOpenLightbox: (imageId: string, imageIds: string[]) => void
   showToast: (message: string, type?: 'info' | 'success' | 'error') => void
-}
+} & InputImageDragControls
 
 export default function InputImageThumbs({
   inputImages,

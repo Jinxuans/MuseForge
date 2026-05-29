@@ -2,7 +2,7 @@ import { useEffect, useState, type MouseEvent as ReactMouseEvent, type ReactNode
 import type { AgentWebSearchStatus } from '../../lib/agentWebSearch'
 import { createMaskPreviewDataUrl } from '../../lib/canvasImage'
 import { ensureImageCached, getCachedImage, useStore } from '../../store'
-import ViewportTooltip from '../ViewportTooltip'
+import ViewportTooltip from '../../shared/ui/ViewportTooltip'
 
 export function AgentActionButton({
   tooltip,

@@ -2,7 +2,7 @@ import type { ClipboardEventHandler, KeyboardEventHandler, RefObject } from 'rea
 import { syncMentionTagSelection } from './contentEditableMentions'
 import { type AtImageOption } from './InputBarParts'
 import AtImageMenu from './AtImageMenu'
-import { CloseIcon } from '../icons'
+import { CloseIcon } from '../../shared/ui/icons'
 
 type PromptInputAreaProps = {
   activeAtImageIndex: number

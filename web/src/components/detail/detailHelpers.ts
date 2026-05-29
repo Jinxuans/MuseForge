@@ -2,6 +2,11 @@ import type { TaskRecord } from '../../types'
 
 const MAX_LINEAGE_DEPTH = 12
 
+export type StreamPreviewItem = {
+  key: string
+  src: string
+}
+
 export function getTaskTitle(task: TaskRecord) {
   return task.prompt?.trim() || task.id
 }
@@ -54,6 +59,29 @@ export function buildTaskDebugSnapshot(task: TaskRecord, input: {
     errorDebug: task.errorDebug ?? null,
   }
   return JSON.stringify(snapshot, null, 2)
+}
+
+export function buildStreamPreviewItems(input: {
+  task: TaskRecord | null
+  streamPreviewSlots?: Record<string, string>
+  streamPreviewSrc: string
+}): StreamPreviewItem[] {
+  const slotEntries = input.streamPreviewSlots
+    ? Object.entries(input.streamPreviewSlots)
+        .filter(([, src]) => Boolean(src))
+        .sort(([a], [b]) => Number(a) - Number(b))
+    : []
+  const count = Math.max(
+    input.task?.status === 'running' ? input.task.params.n : 0,
+    slotEntries.length ? Math.max(...slotEntries.map(([key]) => Number(key) + 1)) : 0,
+    input.streamPreviewSrc ? 1 : 0,
+  )
+  const byIndex = new Map(slotEntries.map(([key, src]) => [Number(key), src]))
+
+  return Array.from({ length: count }, (_, index) => ({
+    key: String(index),
+    src: byIndex.get(index) ?? (index === 0 ? input.streamPreviewSrc : ''),
+  }))
 }
 
 export function buildAncestorChain(task: TaskRecord, tasks: TaskRecord[]) {

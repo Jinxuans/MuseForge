@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import { removeMultipleTasks, useStore } from '../store'
 import type { AgentConversation } from '../types'
 import { useTooltip } from '../hooks/useTooltip'
-import { CloseIcon, EditIcon, TrashIcon } from './icons'
-import ViewportTooltip from './ViewportTooltip'
+import { CloseIcon, EditIcon, TrashIcon } from '../shared/ui/icons'
+import ViewportTooltip from '../shared/ui/ViewportTooltip'
 
 function HistoryActionButton({
   tooltip,

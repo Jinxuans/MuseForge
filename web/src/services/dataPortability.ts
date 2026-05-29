@@ -1,8 +1,8 @@
 import type { AgentConversation, AppSettings, CategoryConfig, ExportData, PromptLibraryItem, TaskRecord } from '../types'
 import { clearAgentConversations, clearImages, clearServerAssets, clearTasks, getAllImages, getAllServerAssets, getAllTasks, getImageThumbnail, putImage, putImageThumbnail, putServerAsset } from '../lib/db'
 import { clearCachedServerAssets } from '../lib/backendAssets'
-import { getPersistableAgentConversations, normalizeAgentConversations } from '../store/agentConversationPersistence'
-import { cacheImage, cacheThumbnail, clearImageCaches } from '../store/imageCache'
+import { getPersistableAgentConversations, normalizeAgentConversations } from '../store/agent/agentConversationPersistence'
+import { cacheImage, cacheThumbnail, clearImageCaches } from '../store/images/imageCache'
 import {
   buildExportServerAssets,
   bytesToDataUrl,
@@ -12,7 +12,7 @@ import {
   readExportZip,
   sanitizeSettingsForExport,
   type ExportZipFiles,
-} from '../store/importExportHelpers'
+} from '../store/persistence/importExportHelpers'
 
 export type ExportOptions = {
   exportConfig?: boolean

@@ -1,24 +1,22 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, moveTasksToTrash, removeTask, restoreTasksFromTrash, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTask } from '../store'
+import { useStore, reuseConfig, editOutputs, moveTasksToTrash, removeTask, restoreTasksFromTrash, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey, retryTask } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
-import { formatImageRatio } from '../lib/size'
-import { copyImageSourceToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
-import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
-import { downloadImageIds } from '../lib/downloadImages'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
-import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, LinkIcon } from './icons'
+import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, LinkIcon } from '../shared/ui/icons'
 
-import ViewportTooltip from './ViewportTooltip'
+import ViewportTooltip from '../shared/ui/ViewportTooltip'
 import TaskActionBar from './detail/TaskActionBar'
 import TaskContextSections from './detail/TaskContextSections'
-import { buildTaskDebugSnapshot, formatTaskDuration, formatTaskTime, redactRawResponsePayload } from './detail/detailHelpers'
+import { copyDetailImageSource, copyDetailText, downloadDetailImages } from './detail/detailActions'
+import { buildStreamPreviewItems, buildTaskDebugSnapshot, formatTaskDuration, formatTaskTime, redactRawResponsePayload } from './detail/detailHelpers'
 import ReferenceImagesSection from './detail/ReferenceImagesSection'
 import { RawImageUrlsModal, RawResponseModal, TaskDebugSnapshotModal } from './detail/TaskDebugModals'
 import TaskParamSummary from './detail/TaskParamSummary'
 import TaskPromptSection from './detail/TaskPromptSection'
+import { useDetailImages } from './detail/useDetailImages'
 
 export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
@@ -36,11 +34,6 @@ export default function DetailModal() {
   const streamPreviewSlots = useStore((s) => detailTaskId ? s.streamPreviewSlots[detailTaskId] : undefined)
 
   const [imageIndex, setImageIndex] = useState(0)
-  const [imageSrcs, setImageSrcs] = useState<Record<string, string>>({})
-  const [outputPreviewSrcs, setOutputPreviewSrcs] = useState<Record<string, string>>({})
-  const [imageRatios, setImageRatios] = useState<Record<string, string>>({})
-  const [imageSizes, setImageSizes] = useState<Record<string, string>>({})
-  const [maskPreviewSrc, setMaskPreviewSrc] = useState('')
   const [now, setNow] = useState(Date.now())
   const [showRawUrlsModal, setShowRawUrlsModal] = useState(false)
   const [showRawResponseModal, setShowRawResponseModal] = useState(false)
@@ -64,25 +57,22 @@ export default function DetailModal() {
     () => tasks.find((t) => t.id === detailTaskId) ?? null,
     [tasks, detailTaskId],
   )
-  const streamPreviewItems = useMemo(() => {
-    const slotEntries = streamPreviewSlots
-      ? Object.entries(streamPreviewSlots)
-          .filter(([, src]) => Boolean(src))
-          .sort(([a], [b]) => Number(a) - Number(b))
-      : []
-    const count = Math.max(
-      task?.status === 'running' ? task.params.n : 0,
-      slotEntries.length ? Math.max(...slotEntries.map(([key]) => Number(key) + 1)) : 0,
-      streamPreviewSrc ? 1 : 0,
-    )
-    const byIndex = new Map(slotEntries.map(([key, src]) => [Number(key), src]))
-
-    return Array.from({ length: count }, (_, index) => ({
-      key: String(index),
-      src: byIndex.get(index) ?? (index === 0 ? streamPreviewSrc : ''),
-    }))
-  }, [task?.params.n, task?.status, streamPreviewSlots, streamPreviewSrc])
+  const streamPreviewItems = useMemo(
+    () => buildStreamPreviewItems({ task, streamPreviewSlots, streamPreviewSrc }),
+    [task, streamPreviewSlots, streamPreviewSrc],
+  )
   const activeStreamPreviewSrc = streamPreviewItems[imageIndex]?.src || ''
+  const {
+    allInputImageIds,
+    currentImageRatio,
+    currentImageSize,
+    currentOutputImageId,
+    currentOutputPreviewSrc,
+    imageSrcs,
+    maskPreviewSrc,
+    maskTargetId,
+    recordOutputImageMetadata,
+  } = useDetailImages(task, imageIndex)
 
   useEffect(() => {
     setStreamPreviewLoaded(false)
@@ -113,94 +103,6 @@ export default function DetailModal() {
     return () => window.clearInterval(id)
   }, [task?.customRecoverable, task?.falRecoverable, task?.status])
 
-  // 加载所有相关图片
-  useEffect(() => {
-    if (!task) {
-      setImageSrcs({})
-      setOutputPreviewSrcs({})
-      setImageRatios({})
-      setImageSizes({})
-      return
-    }
-
-    let cancelled = false
-    const ids = [...new Set([
-      ...(task.inputImageIds || []),
-      ...(task.maskImageId ? [task.maskImageId] : []),
-    ])]
-    const initial: Record<string, string> = {}
-    for (const id of ids) {
-      const cached = getCachedImage(id)
-      if (cached) initial[id] = cached
-    }
-    setImageSrcs(initial)
-    for (const id of ids) {
-      if (initial[id]) continue
-      ensureImageCached(id).then((url) => {
-        if (!cancelled && url) setImageSrcs((prev) => ({ ...prev, [id]: url }))
-      })
-    }
-
-    return () => {
-      cancelled = true
-    }
-  }, [task])
-
-  const currentOutputImageId = task?.outputImages?.[imageIndex] || ''
-  const currentOutputPreviewSrc = currentOutputImageId ? outputPreviewSrcs[currentOutputImageId] || '' : ''
-  const maskTargetId = task?.maskTargetImageId || null
-  const maskTargetSrc = maskTargetId ? imageSrcs[maskTargetId] || '' : ''
-  const maskSrc = task?.maskImageId ? imageSrcs[task.maskImageId] || '' : ''
-  const allInputImageIds = task?.inputImageIds ?? []
-
-  useEffect(() => {
-    const outputImageIds = task?.outputImages ?? []
-    if (outputImageIds.length === 0) {
-      setOutputPreviewSrcs({})
-      return
-    }
-
-    let cancelled = false
-    const setOutputImage = (imageId: string, dataUrl: string) => {
-      if (!cancelled) setOutputPreviewSrcs((prev) => ({ ...prev, [imageId]: dataUrl }))
-    }
-
-    for (const imageId of outputImageIds) {
-      const cached = getCachedImage(imageId)
-      if (cached) {
-        setOutputImage(imageId, cached)
-      } else {
-        ensureImageCached(imageId)
-          .then((dataUrl) => {
-            if (dataUrl) setOutputImage(imageId, dataUrl)
-          })
-          .catch(() => {})
-      }
-    }
-
-    return () => {
-      cancelled = true
-    }
-  }, [task?.outputImages])
-
-  useEffect(() => {
-    let cancelled = false
-    setMaskPreviewSrc('')
-    if (!maskTargetSrc || !maskSrc) return
-
-    createMaskPreviewDataUrl(maskTargetSrc, maskSrc)
-      .then((url) => {
-        if (!cancelled) setMaskPreviewSrc(url)
-      })
-      .catch(() => {
-        if (!cancelled) setMaskPreviewSrc('')
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [maskTargetSrc, maskSrc])
-
   if (!task) return null
 
   const isAgentTask = task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
@@ -209,8 +111,6 @@ export default function DetailModal() {
   const showReferenceSection = allInputImageIds.length > 0 || isAgentEditTool
 
   const outputLen = task.outputImages?.length || 0
-  const currentImageRatio = currentOutputImageId ? imageRatios[currentOutputImageId] : ''
-  const currentImageSize = currentOutputImageId ? imageSizes[currentOutputImageId] : ''
   const currentActualParams = currentOutputImageId ? task.actualParamsByImage?.[currentOutputImageId] : undefined
   const currentRevisedPrompt = currentOutputImageId ? task.revisedPromptByImage?.[currentOutputImageId]?.trim() : ''
   const showRevisedPrompt = Boolean(currentRevisedPrompt && currentRevisedPrompt !== task.prompt.trim())
@@ -277,22 +177,21 @@ export default function DetailModal() {
   }
 
   const handleCopyError = async () => {
-    const errorText = buildCurrentTaskDebugSnapshot()
-    try {
-      await copyTextToClipboard(errorText)
-      showToast('完整报错已复制', 'success')
-    } catch (err) {
-      showToast(getClipboardFailureMessage('复制报错失败', err), 'error')
-    }
+    await copyDetailText({
+      text: buildCurrentTaskDebugSnapshot(),
+      successMessage: '完整报错已复制',
+      failureMessage: '复制报错失败',
+      showToast,
+    })
   }
 
   const handleCopyDebugSnapshot = async () => {
-    try {
-      await copyTextToClipboard(buildCurrentTaskDebugSnapshot())
-      showToast('调试快照已复制', 'success')
-    } catch (err) {
-      showToast(getClipboardFailureMessage('复制快照失败', err), 'error')
-    }
+    await copyDetailText({
+      text: buildCurrentTaskDebugSnapshot(),
+      successMessage: '调试快照已复制',
+      failureMessage: '复制快照失败',
+      showToast,
+    })
   }
 
   const buildCurrentTaskDebugSnapshot = () => buildTaskDebugSnapshot(task, {
@@ -302,13 +201,12 @@ export default function DetailModal() {
   })
 
   const handleCopyPrompt = async () => {
-    if (!task.prompt) return
-    try {
-      await copyTextToClipboard(task.prompt)
-      showToast('提示词已复制', 'success')
-    } catch (err) {
-      showToast(getClipboardFailureMessage('复制提示词失败', err), 'error')
-    }
+    await copyDetailText({
+      text: task.prompt,
+      successMessage: '提示词已复制',
+      failureMessage: '复制提示词失败',
+      showToast,
+    })
   }
 
   const handleShowPromptWarning = () => {
@@ -321,68 +219,47 @@ export default function DetailModal() {
   const handleCopyInputImage = async () => {
     const imgId = allInputImageIds[0]
     const src = imgId ? imageSrcs[imgId] : ''
-    if (!src) return
-    try {
-      await copyImageSourceToClipboard(src)
-      showToast('参考图已复制', 'success')
-    } catch (err) {
-      console.error(err)
-      showToast(getClipboardFailureMessage('复制参考图失败', err), 'error')
-    }
+    await copyDetailImageSource({
+      src,
+      successMessage: '参考图已复制',
+      failureMessage: '复制参考图失败',
+      showToast,
+    })
   }
 
   const handleDownloadCurrentOutput = async (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!currentOutputImageId || !task) return
 
-    try {
-      const result = await downloadImageIds([currentOutputImageId], `task-${task.id}`)
-      if (result.successCount === 0) {
-        showToast('下载失败', 'error')
-      } else {
-        showToast('下载成功', 'success')
-      }
-    } catch (err) {
-      console.error(err)
-      showToast('下载失败', 'error')
-    }
+    await downloadDetailImages({
+      imageIds: [currentOutputImageId],
+      filenamePrefix: `task-${task.id}`,
+      successMessage: () => '下载成功',
+      showToast,
+    })
   }
 
   const handleDownloadAllOutputs = async (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!task?.outputImages?.length) return
 
-    try {
-      const result = await downloadImageIds(task.outputImages, `task-${task.id}`)
-      if (result.successCount === 0) {
-        showToast('下载失败', 'error')
-      } else if (result.failCount > 0) {
-        showToast(`部分下载失败：成功 ${result.successCount}，失败 ${result.failCount}`, 'error')
-      } else {
-        showToast(result.successCount > 1 ? `下载成功：${result.successCount} 张图片` : '下载成功', 'success')
-      }
-    } catch (err) {
-      console.error(err)
-      showToast('下载失败', 'error')
-    }
+    await downloadDetailImages({
+      imageIds: task.outputImages,
+      filenamePrefix: `task-${task.id}`,
+      successMessage: (successCount) => successCount > 1 ? `下载成功：${successCount} 张图片` : '下载成功',
+      showToast,
+    })
   }
 
   const handleDownloadPartialImages = async () => {
     if (!task || !streamPartialImageIds.length) return
 
-    try {
-      const result = await downloadImageIds(streamPartialImageIds, `task-${task.id}-partial`)
-      if (result.successCount === 0) {
-        showToast('下载失败', 'error')
-      } else if (result.failCount > 0) {
-        showToast(`部分下载失败：成功 ${result.successCount}，失败 ${result.failCount}`, 'error')
-      } else {
-        showToast(`下载成功：${result.successCount} 张中间步骤图`, 'success')
-      }
-    } catch (err) {
-      console.error(err)
-      showToast('下载失败', 'error')
-    }
+    await downloadDetailImages({
+      imageIds: streamPartialImageIds,
+      filenamePrefix: `task-${task.id}-partial`,
+      successMessage: (successCount) => `下载成功：${successCount} 张中间步骤图`,
+      showToast,
+    })
   }
 
   const handleRetry = () => {
@@ -462,17 +339,7 @@ export default function DetailModal() {
                 data-image-id={currentOutputImageId}
                 className="saveable-image max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer"
                 onLoad={(e) => {
-                  const image = e.currentTarget
-                  if (currentOutputImageId && image.naturalWidth > 0 && image.naturalHeight > 0) {
-                    setImageRatios((prev) => ({
-                      ...prev,
-                      [currentOutputImageId]: formatImageRatio(image.naturalWidth, image.naturalHeight),
-                    }))
-                    setImageSizes((prev) => ({
-                      ...prev,
-                      [currentOutputImageId]: `${image.naturalWidth}×${image.naturalHeight}`,
-                    }))
-                  }
+                  recordOutputImageMetadata(currentOutputImageId, e.currentTarget)
                 }}
                 onClick={() =>
                   setLightboxImageId(task.outputImages[imageIndex], task.outputImages)
@@ -679,12 +546,12 @@ export default function DetailModal() {
                       onClick={async (e) => {
                         if (task.rawImageUrls!.length === 1) {
                           copyRawUrlsTooltip.handlers.onClick()
-                          try {
-                            await copyTextToClipboard(task.rawImageUrls![0])
-                            showToast('图片链接已复制', 'success')
-                          } catch (err) {
-                            showToast(getClipboardFailureMessage('复制链接失败', err), 'error')
-                          }
+                          await copyDetailText({
+                            text: task.rawImageUrls![0],
+                            successMessage: '图片链接已复制',
+                            failureMessage: '复制链接失败',
+                            showToast,
+                          })
                         } else {
                           dismissAllTooltips()
                           setShowRawUrlsModal(true)

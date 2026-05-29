@@ -3,7 +3,7 @@ import { useStore } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
-import { CloseIcon, CopyIcon, TrashIcon } from './icons'
+import { CloseIcon, CopyIcon, TrashIcon } from '../shared/ui/icons'
 
 function formatTime(value: number) {
   return new Date(value).toLocaleString('zh-CN')
